@@ -27,6 +27,7 @@ mod dependency_format;
 mod foreign_modules;
 mod native_libs;
 mod rmeta;
+mod wasm_synthetic;
 
 pub mod creader;
 pub mod errors;

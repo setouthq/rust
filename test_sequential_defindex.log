@@ -1,0 +1,53 @@
+[CREADER] load_wasm_proc_macros called with 1 entries
+[CREADER] Loading WASM proc macro: Demo from "watt_demo_with_metadata.wasm"
+[CREADER] Read 503343 bytes from watt_demo_with_metadata.wasm
+[CREADER DEBUG] create_wasm_proc_macros called
+[CREADER DEBUG] Extracting proc macro metadata from WASM...
+[CREADER DEBUG] Found 1 metadata entries
+[CREADER] Extracted 1 proc macros from WASM file
+[RESOLVER] Registering 1 WASM proc macros
+[RESOLVER] Registering WASM proc macro: Demo
+[RESOLVER] Assigned synthetic DefId DefId(0:1 ~ test_watt_demo[bab8]::{use#0}) for WASM proc macro Demo
+[RESOLVER] Found WASM proc macro: Demo
+[RESOLVER] Using DefId DefId(0:1 ~ test_watt_demo[bab8]::{use#0}) for WASM proc macro Demo
+[RESOLVER] Found WASM proc macro: Demo
+[RESOLVER] Using DefId DefId(0:1 ~ test_watt_demo[bab8]::{use#0}) for WASM proc macro Demo
+error[E0599]: no associated item named `MESSAGE` found for struct `MyStruct` in the current scope
+ --> test_watt_demo.rs:5:30
+  |
+2 | struct MyStruct;
+  | --------------- associated item `MESSAGE` not found for this struct
+...
+5 |     println!("{}", MyStruct::MESSAGE);
+  |                              ^^^^^^^ associated item not found in `MyStruct`
+
+error: cannot determine resolution for the derive macro `Demo`
+ --> test_watt_demo.rs:1:10
+  |
+1 | #[derive(Demo)]
+  |          ^^^^
+  |
+  = note: import resolution is stuck, try simplifying macro imports
+
+error: aborting due to 2 previous errors
+
+For more information about this error, try `rustc --explain E0599`.
+Error: error while executing at wasm backtrace:
+    0: 0x393482a - <unknown>!<wasm function 166103>
+    1: 0x39327f2 - <unknown>!<wasm function 166056>
+    2: 0x392e5ad - <unknown>!<wasm function 165957>
+    3: 0x392e56e - <unknown>!<wasm function 165956>
+    4: 0x38e44ab - <unknown>!<wasm function 164574>
+    5: 0x36da07f - <unknown>!<wasm function 159002>
+    6: 0x5242c - <unknown>!<wasm function 128>
+    7: 0x4803b - <unknown>!<wasm function 52>
+    8: 0x47f7c - <unknown>!<wasm function 51>
+    9: 0x71efa - <unknown>!<wasm function 573>
+   10: 0x7bd43 - <unknown>!<wasm function 669>
+   11: 0x3924b77 - <unknown>!<wasm function 165752>
+   12: 0x39341cb - <unknown>!<wasm function 166089>
+   13: 0x3951048 - <unknown>!<wasm function 166466>
+   14: 0x39524fa - <unknown>!<wasm function 166496>
+
+Caused by:
+    wasm trap: wasm `unreachable` instruction executed

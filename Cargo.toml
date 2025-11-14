@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
   "compiler/rustc",
+  "compiler/rustc_watt_runtime",
   "src/build_helper",
   "src/etc/test-float-parse",
   "src/rustc-std-workspace/rustc-std-workspace-core",

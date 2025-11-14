@@ -1,0 +1,134 @@
+// WARNING: This output format is intended for human consumers only
+// and is subject to change without notice. Knock yourself out.
+fn simple_test(_1: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    debug _input => _1;
+    let mut _0: proc_macro::TokenStream;
+    let mut _2: std::result::Result<proc_macro::TokenStream, proc_macro::LexError>;
+    let mut _3: &str;
+
+    bb0: {
+        _3 = const "impl Test { fn test() -> u32 { 42 } }";
+        _2 = core::str::<impl str>::parse::<proc_macro::TokenStream>(move _3) -> [return: bb1, unwind unreachable];
+    }
+
+    bb1: {
+        _0 = Result::<proc_macro::TokenStream, LexError>::unwrap(move _2) -> [return: bb2, unwind unreachable];
+    }
+
+    bb2: {
+        drop(_1) -> [return: bb3, unwind unreachable];
+    }
+
+    bb3: {
+        return;
+    }
+}
+
+fn simple_attr(_1: proc_macro::TokenStream, _2: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    debug _attr => _1;
+    debug item => _2;
+    let mut _0: proc_macro::TokenStream;
+
+    bb0: {
+        _0 = move _2;
+        drop(_1) -> [return: bb1, unwind unreachable];
+    }
+
+    bb1: {
+        return;
+    }
+}
+
+fn simple_bang(_1: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    debug _input => _1;
+    let mut _0: proc_macro::TokenStream;
+    let mut _2: std::result::Result<proc_macro::TokenStream, proc_macro::LexError>;
+    let mut _3: &str;
+
+    bb0: {
+        _3 = const "42u32";
+        _2 = core::str::<impl str>::parse::<proc_macro::TokenStream>(move _3) -> [return: bb1, unwind unreachable];
+    }
+
+    bb1: {
+        _0 = Result::<proc_macro::TokenStream, LexError>::unwrap(move _2) -> [return: bb2, unwind unreachable];
+    }
+
+    bb2: {
+        drop(_1) -> [return: bb3, unwind unreachable];
+    }
+
+    bb3: {
+        return;
+    }
+}
+
+const _: () = {
+    let mut _0: ();
+
+    bb0: {
+        _0 = const ();
+        return;
+    }
+}
+
+static _DECLS: &[ProcMacro] = {
+    let mut _0: &[proc_macro::bridge::client::ProcMacro];
+    let mut _1: &[proc_macro::bridge::client::ProcMacro; 3];
+    let _2: &[proc_macro::bridge::client::ProcMacro; 3];
+    let _3: [proc_macro::bridge::client::ProcMacro; 3];
+    let mut _4: proc_macro::bridge::client::ProcMacro;
+    let mut _5: &[&str];
+    let mut _6: &[&str; 0];
+    let _7: &[&str; 0];
+    let _8: [&str; 0];
+    let mut _9: proc_macro::bridge::client::ProcMacro;
+    let mut _10: proc_macro::bridge::client::ProcMacro;
+    let mut _11: &[proc_macro::bridge::client::ProcMacro; 3];
+
+    bb0: {
+        StorageLive(_1);
+        StorageLive(_2);
+        _11 = const _::_DECLS::promoted[0];
+        _2 = &(*_11);
+        _1 = &(*_2);
+        _0 = move _1 as &[proc_macro::bridge::client::ProcMacro] (PointerCoercion(Unsize, Implicit));
+        StorageDead(_2);
+        StorageDead(_1);
+        return;
+    }
+}
+
+const _DECLS::promoted[0]: &[ProcMacro; 3] = {
+    let mut _0: &[proc_macro::bridge::client::ProcMacro; 3];
+    let mut _1: [proc_macro::bridge::client::ProcMacro; 3];
+    let mut _2: proc_macro::bridge::client::ProcMacro;
+    let mut _3: &[&str];
+    let mut _4: &[&str; 0];
+    let mut _5: &[&str; 0];
+    let mut _6: [&str; 0];
+    let mut _7: proc_macro::bridge::client::ProcMacro;
+    let mut _8: proc_macro::bridge::client::ProcMacro;
+
+    bb0: {
+        _6 = [];
+        _5 = &_6;
+        _4 = &(*_5);
+        _3 = move _4 as &[&str] (PointerCoercion(Unsize, Implicit));
+        _2 = ProcMacro::custom_derive::<fn(proc_macro::TokenStream) -> proc_macro::TokenStream {simple_test}>(const "SimpleTest", move _3, simple_test) -> [return: bb1, unwind continue];
+    }
+
+    bb1: {
+        _7 = ProcMacro::attr::<fn(proc_macro::TokenStream, proc_macro::TokenStream) -> proc_macro::TokenStream {simple_attr}>(const "simple_attr", simple_attr) -> [return: bb2, unwind continue];
+    }
+
+    bb2: {
+        _8 = ProcMacro::bang::<fn(proc_macro::TokenStream) -> proc_macro::TokenStream {simple_bang}>(const "simple_bang", simple_bang) -> [return: bb3, unwind continue];
+    }
+
+    bb3: {
+        _1 = [move _2, move _7, move _8];
+        _0 = &_1;
+        return;
+    }
+}

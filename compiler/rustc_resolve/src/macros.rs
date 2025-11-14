@@ -792,12 +792,22 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 None,
                 None,
             );
+
+            // Debug: Log what binding was returned for single-segment paths
+            eprintln!("[MACROS] early_resolve_ident_in_lexical_scope for '{}' returned: {:?}",
+                      path[0].ident, binding);
+
             if let Err(Determinacy::Undetermined) = binding {
                 return Err(Determinacy::Undetermined);
             }
 
             if trace {
                 let kind = kind.expect("macro kind must be specified if tracing is enabled");
+
+                // Debug: Log what we're storing in single_segment_macro_resolutions
+                eprintln!("[MACROS] Storing in single_segment_macro_resolutions: ident={}, kind={:?}, binding={:?}",
+                          path[0].ident, kind, binding.ok());
+
                 self.single_segment_macro_resolutions.push((
                     path[0].ident,
                     kind,
@@ -935,6 +945,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
         let macro_resolutions = mem::take(&mut self.single_segment_macro_resolutions);
         for (ident, kind, parent_scope, initial_binding) in macro_resolutions {
+            // Debug: Log what we're finalizing
+            eprintln!("[FINALIZE] Processing macro '{}', kind={:?}, initial_binding={:?}",
+                      ident, kind, initial_binding);
+
             match self.early_resolve_ident_in_lexical_scope(
                 ident,
                 ScopeSet::Macro(kind),
@@ -945,11 +959,17 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 None,
             ) {
                 Ok(binding) => {
+                    eprintln!("[FINALIZE] Re-resolved '{}' to binding: {:?}", ident, binding);
+
                     let initial_res = initial_binding.map(|initial_binding| {
                         self.record_use(ident, initial_binding, Used::Other);
                         initial_binding.res()
                     });
                     let res = binding.res();
+
+                    eprintln!("[FINALIZE] For '{}': initial_res={:?}, final_res={:?}",
+                              ident, initial_res, res);
+
                     let seg = Segment::from_ident(ident);
                     check_consistency(self, &[seg], ident.span, kind, initial_res, res);
                     if res == Res::NonMacroAttr(NonMacroAttrKind::DeriveHelperCompat) {

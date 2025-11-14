@@ -1,0 +1,62 @@
+[CREADER] load_wasm_proc_macros called with 1 entries
+[CREADER] Loading WASM proc macro: Demo from "watt_demo_with_metadata.wasm"
+[CREADER] Read 503343 bytes from watt_demo_with_metadata.wasm
+[CREADER DEBUG] create_wasm_proc_macros called
+[CREADER DEBUG] Extracting proc macro metadata from WASM...
+[CREADER DEBUG] Found 1 metadata entries
+[CREADER] Extracted 1 proc macros from WASM file
+[RESOLVER] Registering 1 WASM proc macros
+[RESOLVER] Registering WASM proc macro: Demo
+thread 'rustc' panicked at /home/ubuntu/macovedj/rust/compiler/rustc_span/src/def_id.rs:207:1:
+assertion failed: value <= 0xFFFF_FF00
+stack backtrace:
+
+error: the compiler unexpectedly panicked. this is a bug.
+
+note: we would appreciate a bug report: https://github.com/rust-lang/rust/issues/new?labels=C-bug%2C+I-ICE%2C+T-compiler&template=ice.md
+
+note: rustc 1.84.1 (b8bf17f81 2025-10-30) running on wasm32-wasip1-threads
+
+query stack during panic:
+#0 [resolver_for_lowering_raw] getting the resolver for lowering
+end of query stack
+Error: error while executing at wasm backtrace:
+    0: 0x393482d - <unknown>!<wasm function 166103>
+    1: 0x39327f5 - <unknown>!<wasm function 166056>
+    2: 0x39327c8 - <unknown>!<wasm function 166055>
+    3: 0x3931641 - <unknown>!<wasm function 166027>
+    4: 0x393157b - <unknown>!<wasm function 166026>
+    5: 0x39321e5 - <unknown>!<wasm function 166046>
+    6: 0x395c272 - <unknown>!<wasm function 166639>
+    7: 0x3958fe8 - <unknown>!<wasm function 166603>
+    8: 0x2526551 - <unknown>!<wasm function 104936>
+    9: 0x26104bf - <unknown>!<wasm function 107150>
+   10: 0x158a47 - <unknown>!<wasm function 4177>
+   11: 0x29a5ea1 - <unknown>!<wasm function 119219>
+   12: 0x29a5e65 - <unknown>!<wasm function 119218>
+   13: 0x27c39f3 - <unknown>!<wasm function 111746>
+   14: 0x2885061 - <unknown>!<wasm function 113285>
+   15: 0x28db7cc - <unknown>!<wasm function 113944>
+   16: 0x390756f - <unknown>!<wasm function 165003>
+   17: 0x3907a65 - <unknown>!<wasm function 165021>
+   18: 0x3907544 - <unknown>!<wasm function 165002>
+   19: 0x3907975 - <unknown>!<wasm function 165016>
+   20: 0x2739139 - <unknown>!<wasm function 110431>
+   21: 0x2a19d06 - <unknown>!<wasm function 120421>
+   22: 0x35e3d79 - <unknown>!<wasm function 155102>
+   23: 0x4ba57 - <unknown>!<wasm function 101>
+   24: 0x4b3d8 - <unknown>!<wasm function 90>
+   25: 0x4b321 - <unknown>!<wasm function 89>
+   26: 0x52c90 - <unknown>!<wasm function 129>
+   27: 0x51ec6 - <unknown>!<wasm function 128>
+   28: 0x4803b - <unknown>!<wasm function 52>
+   29: 0x47f7c - <unknown>!<wasm function 51>
+   30: 0x71efa - <unknown>!<wasm function 573>
+   31: 0x7bd43 - <unknown>!<wasm function 669>
+   32: 0x3924b7a - <unknown>!<wasm function 165752>
+   33: 0x39341ce - <unknown>!<wasm function 166089>
+   34: 0x395104b - <unknown>!<wasm function 166466>
+   35: 0x39524fd - <unknown>!<wasm function 166496>
+
+Caused by:
+    wasm trap: wasm `unreachable` instruction executed

@@ -168,6 +168,9 @@ top_level_options!(
         prints: Vec<PrintRequest> [UNTRACKED],
         cg: CodegenOptions [SUBSTRUCT],
         externs: Externs [UNTRACKED],
+        /// Directly load WASM proc-macro files (bypasses metadata system)
+        /// Format: --wasm-proc-macro Name=path/to/file.wasm
+        wasm_proc_macros: Vec<(String, PathBuf)> [UNTRACKED],
         crate_name: Option<String> [TRACKED],
         /// Indicates how the compiler should treat unstable features.
         unstable_features: UnstableFeatures [TRACKED],

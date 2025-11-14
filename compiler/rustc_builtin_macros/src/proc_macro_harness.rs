@@ -82,8 +82,16 @@ pub fn inject(
         return;
     }
 
+    // Generate the normal static array
     let decls = mk_decls(&mut cx, &macros);
     krate.items.push(decls);
+
+    // For WASM targets, generate metadata in a format that can be extracted
+    // by the watt runtime loader
+    if sess.target.llvm_target.contains("wasm") {
+        let wasm_metadata = mk_wasm_metadata(&mut cx, &macros);
+        krate.items.push(wasm_metadata);
+    }
 }
 
 impl<'a> CollectProcMacros<'a> {
@@ -393,3 +401,133 @@ fn mk_decls(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> {
     let items = AstFragment::Items(smallvec![anon_constant]);
     cx.monotonic_expander().fully_expand_fragment(items).make_items().pop().unwrap()
 }
+
+// Generates WASM metadata for proc macros in a format that can be extracted
+// by the watt runtime loader. The metadata is embedded as a byte array with
+// #[link_section] to place it in a custom WASM section.
+//
+// Format: "derive:TraitName:function_name[:attributes]\nattr:name:function_name\n..."
+fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> {
+    let expn_id = cx.resolver.expansion_for_ast_pass(
+        DUMMY_SP,
+        AstPass::ProcMacroHarness,
+        &[sym::rustc_attrs, sym::proc_macro_internals],
+        None,
+    );
+    let span = DUMMY_SP.with_def_site_ctxt(expn_id.to_expn_id());
+
+    // Build the metadata string
+    let mut metadata = String::new();
+    for m in macros {
+        match m {
+            ProcMacro::Derive(cd) => {
+                metadata.push_str("derive:");
+                metadata.push_str(&cd.trait_name.as_str());
+                metadata.push(':');
+                metadata.push_str(&cd.function_name.as_str());
+                if !cd.attrs.is_empty() {
+                    metadata.push(':');
+                    for (i, attr) in cd.attrs.iter().enumerate() {
+                        if i > 0 {
+                            metadata.push(',');
+                        }
+                        metadata.push_str(&attr.as_str());
+                    }
+                }
+                metadata.push('\n');
+            }
+            ProcMacro::Attr(ca) => {
+                metadata.push_str("attr:");
+                metadata.push_str(&ca.function_name.as_str());
+                metadata.push(':');
+                metadata.push_str(&ca.function_name.as_str());
+                metadata.push('\n');
+            }
+            ProcMacro::Bang(ca) => {
+                metadata.push_str("bang:");
+                metadata.push_str(&ca.function_name.as_str());
+                metadata.push(':');
+                metadata.push_str(&ca.function_name.as_str());
+                metadata.push('\n');
+            }
+        }
+    }
+
+    // Convert to byte array
+    let metadata_bytes: Vec<u8> = metadata.into_bytes();
+    let metadata_len = metadata_bytes.len();
+
+    // Create array of individual integer literals: [0u8, 1u8, 2u8, ...]
+    // This is required for WASM link_section which doesn't support indirection
+    let byte_exprs: ThinVec<_> = metadata_bytes
+        .iter()
+        .map(|&byte| {
+            // Create integer literal with u8 suffix
+            let lit = ast::token::Lit::new(
+                ast::token::LitKind::Integer,
+                Symbol::intern(&format!("{}", byte)),
+                Some(sym::u8),
+            );
+            P(ast::Expr {
+                id: ast::DUMMY_NODE_ID,
+                kind: ast::ExprKind::Lit(lit),
+                span,
+                attrs: ast::AttrVec::new(),
+                tokens: None,
+            })
+        })
+        .collect();
+
+    let array_expr = cx.expr(span, ast::ExprKind::Array(byte_exprs));
+
+    // Create an AnonConst for the array size
+    let size_expr = cx.expr_usize(span, metadata_len);
+    let anon_const = ast::AnonConst {
+        id: ast::DUMMY_NODE_ID,
+        value: size_expr,
+    };
+
+    // Create the static declaration:
+    // #[link_section = ".rustc_proc_macro_decls"]
+    // #[used]
+    // static WASM_METADATA: [u8; N] = [byte_literals...];
+    let item = cx.item_static(
+        span,
+        Ident::new(Symbol::intern("WASM_METADATA"), span),
+        cx.ty(
+            span,
+            ast::TyKind::Array(
+                cx.ty_path(cx.path(span, vec![Ident::new(sym::u8, span)])),
+                anon_const,
+            ),
+        ),
+        ast::Mutability::Not,
+        array_expr,
+    )
+    .map(|mut item| {
+        // Add #[link_section = ".rustc_proc_macro_decls"]
+        item.attrs.push(cx.attr_name_value_str(
+            sym::link_section,
+            Symbol::intern(".rustc_proc_macro_decls"),
+            span,
+        ));
+        // Add #[used]
+        item.attrs.push(cx.attr_word(sym::used, span));
+        item
+    });
+
+    // Wrap in const _: () = { ... };
+    let block = cx.expr_block(cx.block(span, thin_vec![cx.stmt_item(span, item)]));
+
+    let anon_constant = cx.item_const(
+        span,
+        Ident::new(kw::Underscore, span),
+        cx.ty(span, ast::TyKind::Tup(ThinVec::new())),
+        block,
+    );
+
+    // Integrate the new item into existing module structures.
+    let items = AstFragment::Items(smallvec![anon_constant]);
+    cx.monotonic_expander().fully_expand_fragment(items).make_items().pop().unwrap()
+}
+

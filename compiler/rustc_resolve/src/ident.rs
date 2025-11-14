@@ -569,11 +569,33 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         }
                     }
                     Scope::MacroUsePrelude => {
-                        match this.macro_use_prelude.get(&ident.name).cloned() {
-                            Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
-                            None => Err(Determinacy::determined(
-                                this.graph_root.unexpanded_invocations.borrow().is_empty(),
-                            )),
+                        // First check WASM proc macros loaded via --wasm-proc-macro
+                        if this.wasm_proc_macros.contains_key(&ident.name) {
+                            eprintln!("[RESOLVER] Found WASM proc macro: {}", ident.name);
+
+                            // Find the DefId for this macro name by searching the reverse map
+                            let def_id = this.wasm_proc_macro_def_id_to_name
+                                .iter()
+                                .find(|(_, name)| **name == ident.name)
+                                .map(|(def_id, _)| *def_id)
+                                .expect("WASM proc macro should have a DefId mapping");
+
+                            eprintln!("[RESOLVER] Using DefId {:?} for WASM proc macro {}", def_id, ident.name);
+
+                            // Create a NameBinding with the unique DefId
+                            let res = Res::Def(DefKind::Macro(MacroKind::Derive), def_id);
+                            let binding = (res, Visibility::Public, ident.span, LocalExpnId::ROOT)
+                                .to_name_binding(this.arenas);
+                            // Return early with the binding and flags
+                            Ok((binding, Flags::MISC_FROM_PRELUDE))
+                        } else {
+                            // Then check macro_use_prelude
+                            match this.macro_use_prelude.get(&ident.name).cloned() {
+                                Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
+                                None => Err(Determinacy::determined(
+                                    this.graph_root.unexpanded_invocations.borrow().is_empty(),
+                                )),
+                            }
                         }
                     }
                     Scope::BuiltinAttrs => match this.builtin_attrs_bindings.get(&ident.name) {
@@ -655,7 +677,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         if sub_namespace_match(binding.macro_kind(), macro_kind) =>
                     {
                         if finalize.is_none() || matches!(scope_set, ScopeSet::Late(..)) {
-                            return Some(Ok(binding));
+                            return Some(Ok((binding, flags)));
                         }
 
                         if let Some((innermost_binding, innermost_flags)) = innermost_result {
@@ -722,7 +744,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                                         misc1: misc(innermost_flags),
                                         misc2: misc(flags),
                                     });
-                                    return Some(Ok(innermost_binding));
+                                    return Some(Ok((innermost_binding, innermost_flags)));
                                 }
                             }
                         } else {
@@ -739,7 +761,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         );
 
         if let Some(break_result) = break_result {
-            return break_result;
+            return break_result.map(|(binding, _)| binding);
         }
 
         // The first found solution was the only one, return it.

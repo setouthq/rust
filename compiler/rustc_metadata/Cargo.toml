@@ -31,3 +31,6 @@ rustc_type_ir = { path = "../rustc_type_ir" }
 tempfile = "3.2"
 tracing = "0.1"
 # tidy-alphabetical-end
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+rustc_watt_runtime = { path = "../rustc_watt_runtime" }

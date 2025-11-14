@@ -11,5 +11,5 @@ proc-macro = true
 proc-macro2 = "1"
 quote = "1"
 syn = { version = "2.0.9", features = ["full"] }
-synstructure = "0.13.0"
+synstructure = { git = "https://github.com/macovedj/synstructure" }
 # tidy-alphabetical-end

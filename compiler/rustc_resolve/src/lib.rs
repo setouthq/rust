@@ -998,6 +998,7 @@ struct DeriveData {
     has_derive_copy: bool,
 }
 
+#[derive(Clone)]
 struct MacroData {
     ext: Lrc<SyntaxExtension>,
     rule_spans: Vec<(usize, Span)>,
@@ -1114,6 +1115,13 @@ pub struct Resolver<'ra, 'tcx> {
     registered_tools: &'tcx RegisteredTools,
     macro_use_prelude: FxHashMap<Symbol, NameBinding<'ra>>,
     macro_map: FxHashMap<DefId, MacroData>,
+    /// Storage for WASM proc macros loaded via --wasm-proc-macro
+    /// Maps macro name (e.g., "Demo") to MacroData
+    wasm_proc_macros: FxHashMap<Symbol, MacroData>,
+    /// Counter for generating synthetic DefIds for WASM proc macros
+    wasm_proc_macro_def_id_counter: u32,
+    /// Maps synthetic DefId back to macro name for WASM proc macros
+    wasm_proc_macro_def_id_to_name: FxHashMap<DefId, Symbol>,
     dummy_ext_bang: Lrc<SyntaxExtension>,
     dummy_ext_derive: Lrc<SyntaxExtension>,
     non_macro_attr: MacroData,
@@ -1512,6 +1520,9 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             registered_tools,
             macro_use_prelude: FxHashMap::default(),
             macro_map: FxHashMap::default(),
+            wasm_proc_macros: FxHashMap::default(),
+            wasm_proc_macro_def_id_counter: 0,
+            wasm_proc_macro_def_id_to_name: FxHashMap::default(),
             dummy_ext_bang: Lrc::new(SyntaxExtension::dummy_bang(edition)),
             dummy_ext_derive: Lrc::new(SyntaxExtension::dummy_derive(edition)),
             non_macro_attr: MacroData::new(Lrc::new(SyntaxExtension::non_macro_attr(edition))),
@@ -1717,9 +1728,51 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         }
     }
 
+    /// Register WASM proc macros loaded via `--wasm-proc-macro` flags
+    /// This stores them in the `wasm_proc_macros` map and creates synthetic DefIds for lookup
+    fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Lrc<SyntaxExtension>)>) {
+        use rustc_hir::def_id::LocalDefId;
+
+        for (name, ext) in macros {
+            eprintln!("[RESOLVER] Registering WASM proc macro: {}", name);
+
+            // Create MacroData from the SyntaxExtension
+            let macro_data = MacroData::new(ext);
+
+            // Use sequential DefIndex values starting from 1 for each WASM proc macro
+            // This gives each macro a unique DefId so they can all be stored in macro_map
+            // Low DefIndex values (1, 2, 3, etc.) are safe and won't cause index issues
+            let def_index = rustc_span::def_id::DefIndex::from_u32(1 + self.wasm_proc_macro_def_id_counter);
+            self.wasm_proc_macro_def_id_counter += 1;
+
+            let local_def_id = rustc_hir::def_id::LocalDefId { local_def_index: def_index };
+            let def_id = local_def_id.to_def_id();
+
+            eprintln!("[RESOLVER] Assigned synthetic DefId {:?} for WASM proc macro {}", def_id, name);
+
+            // Store the name->DefId mapping for later lookup
+            self.wasm_proc_macro_def_id_to_name.insert(def_id, name);
+
+            // Store in both wasm_proc_macros (for name-based lookup during resolution)
+            // AND in macro_map (for DefId-based lookup during macro expansion)
+            self.wasm_proc_macros.insert(name, macro_data.clone());
+            self.macro_map.insert(def_id, macro_data);
+        }
+    }
+
     /// Entry point to crate resolution.
     pub fn resolve_crate(&mut self, krate: &Crate) {
         self.tcx.sess.time("resolve_crate", || {
+            // Load WASM proc macros specified via --wasm-proc-macro flags before resolution
+            let wasm_proc_macros = self.tcx.sess.time("load_wasm_proc_macros", || {
+                self.crate_loader(|c| c.load_wasm_proc_macros())
+            });
+
+            // Register WASM proc macros in the resolver
+            if !wasm_proc_macros.is_empty() {
+                eprintln!("[RESOLVER] Registering {} WASM proc macros", wasm_proc_macros.len());
+                self.register_wasm_proc_macros(wasm_proc_macros);
+            }
             self.tcx.sess.time("finalize_imports", || self.finalize_imports());
             let exported_ambiguities = self.tcx.sess.time("compute_effective_visibilities", || {
                 EffectiveVisibilitiesVisitor::compute_effective_visibilities(self, krate)

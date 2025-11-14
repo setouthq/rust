@@ -190,7 +190,7 @@ pub fn invalid_output_for_target(sess: &Session, crate_type: CrateType) -> bool 
             return true;
         }
     }
-    if let CrateType::ProcMacro | CrateType::Dylib = crate_type
+    if let CrateType::Dylib = crate_type
         && sess.target.only_cdylib
     {
         return true;
