@@ -147,6 +147,10 @@ pub enum Instr {
     IRel(types::Int, IRelOp),                      // integer numeric comparison
     FRel(types::Float, FRelOp),                    // floating numeric comparison
     Convert(ConvertOp),                            // conversion
+    // Reference types proposal (partial support for decoding only)
+    RefNull,                                       // push null reference (0xc0)
+    RefIsNull,                                     // test if reference is null (0xc1)
+    RefFunc(Index),                                // get reference to function (0xc2)
 }
 
 pub type Expr = Vec<Instr>;

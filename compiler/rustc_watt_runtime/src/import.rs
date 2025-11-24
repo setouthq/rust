@@ -2,6 +2,7 @@ use crate::runtime::{func1, mem_func2, HostFunc, Store};
 use crate::sym;
 
 pub fn host_func(name: &str, store: &Store) -> HostFunc {
+    eprintln!("[WATT DEBUG] Resolving import: {}", name);
     match name {
         "token_stream_serialize" => func1(sym::token_stream_serialize, store),
         "token_stream_deserialize" => mem_func2(sym::token_stream_deserialize, store),

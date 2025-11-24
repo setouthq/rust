@@ -163,6 +163,33 @@ impl<'a> Interpreter<'a> {
             IRel(t, ref op) => self.irel(t, op),
             FRel(t, ref op) => self.frel(t, op),
             Convert(ref op) => self.cvtop(op),
+
+            // Reference types proposal instructions
+            // Minimal implementation: represent references as i32 values
+            // null = 0, non-null function refs = func_index + 1
+            RefNull => {
+                eprintln!("[WATT RUNTIME] Executing ref.null: pushing null reference (0)");
+                self.stack.push(Value::I32(0));
+                Ok(Continue)
+            }
+
+            RefIsNull => {
+                eprintln!("[WATT RUNTIME] Executing ref.is_null");
+                let val = self.stack.pop().unwrap();
+                let is_null = match val {
+                    Value::I32(0) => 1,
+                    _ => 0,
+                };
+                self.stack.push(Value::I32(is_null));
+                Ok(Continue)
+            }
+
+            RefFunc(idx) => {
+                eprintln!("[WATT RUNTIME] Executing ref.func: func_index={}, pushing reference", idx);
+                // Push a non-null reference (func_index + 1 to distinguish from null)
+                self.stack.push(Value::I32(idx + 1));
+                Ok(Continue)
+            }
         }
     }
 

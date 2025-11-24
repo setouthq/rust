@@ -112,6 +112,13 @@ pub use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
 pub use std::sync::{Arc as Lrc, OnceLock, Weak};
 
 pub use mode::{is_dyn_thread_safe, set_dyn_thread_safe_mode};
+
+#[cfg(target_family = "wasm")]
+pub use std::sync::{
+    MappedRwLockReadGuard as MappedReadGuard, MappedRwLockWriteGuard as MappedWriteGuard,
+    RwLockReadGuard as ReadGuard, RwLockWriteGuard as WriteGuard,
+};
+#[cfg(not(target_family = "wasm"))]
 pub use parking_lot::{
     MappedMutexGuard as MappedLockGuard, MappedRwLockReadGuard as MappedReadGuard,
     MappedRwLockWriteGuard as MappedWriteGuard, RwLockReadGuard as ReadGuard,
@@ -152,6 +159,10 @@ impl<T> MTLock<T> {
     }
 }
 
+// On WASM, parking_lot doesn't support thread parking, so use std::sync::RwLock
+#[cfg(target_family = "wasm")]
+use std::sync::RwLock as InnerRwLock;
+#[cfg(not(target_family = "wasm"))]
 use parking_lot::RwLock as InnerRwLock;
 
 /// This makes locks panic if they are already held.
@@ -187,20 +198,37 @@ impl<T> RwLock<T> {
 
     #[inline(always)]
     pub fn into_inner(self) -> T {
-        self.0.into_inner()
+        #[cfg(target_family = "wasm")]
+        return self.0.into_inner().expect("RwLock poisoned");
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.into_inner();
     }
 
     #[inline(always)]
     pub fn get_mut(&mut self) -> &mut T {
-        self.0.get_mut()
+        #[cfg(target_family = "wasm")]
+        return self.0.get_mut().expect("RwLock poisoned");
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.get_mut();
     }
 
     #[inline(always)]
     pub fn read(&self) -> ReadGuard<'_, T> {
-        if ERROR_CHECKING {
-            self.0.try_read().expect("lock was already held")
-        } else {
-            self.0.read()
+        #[cfg(target_family = "wasm")]
+        {
+            if ERROR_CHECKING {
+                self.0.try_read().expect("lock was already held")
+            } else {
+                self.0.read().expect("RwLock poisoned")
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ERROR_CHECKING {
+                self.0.try_read().expect("lock was already held")
+            } else {
+                self.0.read()
+            }
         }
     }
 
@@ -212,15 +240,29 @@ impl<T> RwLock<T> {
 
     #[inline(always)]
     pub fn try_write(&self) -> Result<WriteGuard<'_, T>, ()> {
-        self.0.try_write().ok_or(())
+        #[cfg(target_family = "wasm")]
+        return self.0.try_write().map_err(|_| ());
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.try_write().ok_or(());
     }
 
     #[inline(always)]
     pub fn write(&self) -> WriteGuard<'_, T> {
-        if ERROR_CHECKING {
-            self.0.try_write().expect("lock was already held")
-        } else {
-            self.0.write()
+        #[cfg(target_family = "wasm")]
+        {
+            if ERROR_CHECKING {
+                self.0.try_write().expect("lock was already held or poisoned")
+            } else {
+                self.0.write().expect("RwLock poisoned")
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ERROR_CHECKING {
+                self.0.try_write().expect("lock was already held")
+            } else {
+                self.0.write()
+            }
         }
     }
 

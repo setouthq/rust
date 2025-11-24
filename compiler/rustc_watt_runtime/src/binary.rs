@@ -250,8 +250,8 @@ impl<R: Read> Decoder<R> {
         use super::types::Value::*;
 
         let opcode = self.read_byte()?;
-
-        Ok(MetaInstr::Instr(match opcode {
+        eprintln!("this is the opcode: {}", &opcode);
+        let result = Ok(MetaInstr::Instr(match opcode {
             0x00 => Unreachable,
             0x01 => Nop,
 
@@ -286,7 +286,13 @@ impl<R: Read> Decoder<R> {
             0x10 => Call(self.read_index()?),
             0x11 => {
                 let index = self.read_index()?;
-                if self.read_byte()? != 0 {
+                // In WASM MVP, this was a reserved byte that must be 0
+                // In newer WASM (reference-types proposal), this is a varuint32 table index
+                // Try reading as varuint32 to support both formats
+                let table_index = self.read_vu32()?;
+                eprintln!("[WASM DECODE] CallIndirect: type_index={}, table_index={}", index, table_index);
+                if table_index != 0 {
+                    eprintln!("[WASM DECODE] ERROR: CallIndirect with non-zero table index {} (only table 0 is supported)", table_index);
                     return Err(DecodeError::MalformedBinary);
                 }
                 CallIndirect(index)
@@ -553,8 +559,28 @@ impl<R: Read> Decoder<R> {
                 to: Float(F64),
             }),
 
-            _ => return Err(DecodeError::MalformedBinary),
-        }))
+            // Reference types proposal instructions
+            0xc0 => {
+                eprintln!("[WASM DECODE] ref.null instruction");
+                RefNull
+            }
+            0xc1 => {
+                eprintln!("[WASM DECODE] ref.is_null instruction");
+                RefIsNull
+            }
+            0xc2 => {
+                eprintln!("[WASM DECODE] ref.func instruction");
+                let func_index = self.read_index()?;
+                eprintln!("[WASM DECODE] ref.func: func_index={}", func_index);
+                RefFunc(func_index)
+            }
+
+            _ => {
+                eprintln!("[WASM DECODE] ERROR: Unknown/unsupported opcode: 0x{:02x}", opcode);
+                return Err(DecodeError::MalformedBinary);
+            }
+        }));
+        result
     }
 
     fn read_instr_block_with_delim(&mut self) -> DecodeResult<(Vec<Instr>, PseudoInstr)> {
@@ -735,15 +761,50 @@ impl<R: Read> Decoder<R> {
     }
 
     fn read_code(&mut self) -> DecodeResult<(Vec<types::Value>, Expr)> {
-        let _size = self.read_vu32()?;
+        eprintln!("[WASM DECODE]: read_code invoked ");
+        let size = self.read_vu32()?;
+        eprintln!("[WASM DECODE] Function body size: {}", size);
         // TODO: do not create intermediate vectors just to concatenate them
-        let locals = self.read_vec(Decoder::read_locals)?.concat();
-        let body = self.read_expr()?;
+        eprintln!("[WASM DECODE] Reading locals...");
+        let locals = match self.read_vec(Decoder::read_locals) {
+            Ok(l) => {
+                eprintln!("[WASM DECODE] Locals OK");
+                l.concat()
+            }
+            Err(e) => {
+                eprintln!("[WASM DECODE] ERROR: Failed to read locals");
+                return Err(e);
+            }
+        };
+        eprintln!("[WASM DECODE] Reading function body...");
+        let body = match self.read_expr() {
+            Ok(b) => {
+                eprintln!("[WASM DECODE] Body OK ({} instructions)", b.len());
+                b
+            }
+            Err(e) => {
+                eprintln!("[WASM DECODE] ERROR: Failed to read function body");
+                return Err(e);
+            }
+        };
         Ok((locals, body))
     }
 
     fn read_code_section(&mut self) -> DecodeResult<Vec<(Vec<types::Value>, Expr)>> {
-        self.read_vec(Decoder::read_code)
+        let count = self.read_vu32()?;
+        eprintln!("[WASM DECODE] Code section has {} functions", count);
+        let mut result = Vec::with_capacity(count as usize);
+        for i in 0..count {
+            eprintln!("[WASM DECODE] Decoding function {}/{}", i + 1, count);
+            match self.read_code() {
+                Ok(code) => result.push(code),
+                Err(e) => {
+                    eprintln!("[WASM DECODE] ERROR: Failed to decode function {}/{}", i + 1, count);
+                    return Err(e);
+                }
+            }
+        }
+        Ok(result)
     }
 
     fn read_data(&mut self) -> DecodeResult<Segment<u8>> {
@@ -755,12 +816,17 @@ impl<R: Read> Decoder<R> {
     }
 
     fn read_module(&mut self) -> DecodeResult<Module> {
+        eprintln!("[WASM DECODE] Starting module decode");
         if self.read_u32()? != MAGIC {
+            eprintln!("[WASM DECODE] ERROR: Invalid magic number");
             return Err(DecodeError::MalformedBinary);
         }
+        eprintln!("[WASM DECODE] Magic OK");
         if self.read_u32()? != VERSION {
+            eprintln!("[WASM DECODE] ERROR: Invalid version");
             return Err(DecodeError::MalformedBinary);
         }
+        eprintln!("[WASM DECODE] Version OK");
 
         let mut types = Vec::new();
         let mut imports = Vec::new();
@@ -780,26 +846,35 @@ impl<R: Read> Decoder<R> {
 
         loop {
             match self.read_byte() {
-                Err(DecodeError::Io(ref e)) if e.kind() == io::ErrorKind::UnexpectedEof => break,
+                Err(DecodeError::Io(ref e)) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    eprintln!("[WASM DECODE] Reached end of file");
+                    break
+                },
                 Err(e) => return Err(e),
                 Ok(id) => {
+                    eprintln!("[WASM DECODE] Processing section id={}", id);
                     let size = self.read_vu32()?;
+                    eprintln!("[WASM DECODE] Section size={}", size);
 
                     match id {
-                        0 => self.skip_custom_section(size)?, // ignore custom sections
-                        1 => types = self.read_type_section()?,
-                        2 => imports = self.read_import_section()?,
-                        3 => func_types = self.read_func_section()?,
-                        4 => tables = self.read_table_section()?,
-                        5 => memories = self.read_memory_section()?,
-                        6 => globals = self.read_global_section()?,
-                        7 => exports = self.read_export_section()?,
-                        8 => start = self.read_start_section()?,
-                        9 => elems = self.read_elem_section()?,
-                        10 => func_bodies = self.read_code_section()?,
-                        11 => data = self.read_data_section()?,
-                        _ => return Err(DecodeError::MalformedBinary),
+                        0 => { eprintln!("[WASM DECODE] Custom section"); self.skip_custom_section(size)?; }, // ignore custom sections
+                        1 => { eprintln!("[WASM DECODE] Type section"); types = self.read_type_section()?; },
+                        2 => { eprintln!("[WASM DECODE] Import section"); imports = self.read_import_section()?; },
+                        3 => { eprintln!("[WASM DECODE] Function section"); func_types = self.read_func_section()?; },
+                        4 => { eprintln!("[WASM DECODE] Table section"); tables = self.read_table_section()?; },
+                        5 => { eprintln!("[WASM DECODE] Memory section"); memories = self.read_memory_section()?; },
+                        6 => { eprintln!("[WASM DECODE] Global section"); globals = self.read_global_section()?; },
+                        7 => { eprintln!("[WASM DECODE] Export section"); exports = self.read_export_section()?; },
+                        8 => { eprintln!("[WASM DECODE] Start section"); start = self.read_start_section()?; },
+                        9 => { eprintln!("[WASM DECODE] Element section"); elems = self.read_elem_section()?; },
+                        10 => { eprintln!("[WASM DECODE] Code section"); func_bodies = self.read_code_section()?; },
+                        11 => { eprintln!("[WASM DECODE] Data section"); data = self.read_data_section()?; },
+                        _ => {
+                            eprintln!("[WASM DECODE] ERROR: Unknown section id={}", id);
+                            return Err(DecodeError::MalformedBinary);
+                        }
                     }
+                    eprintln!("[WASM DECODE] Section {} completed", id);
                 }
             }
         }

@@ -3,6 +3,7 @@
 #[cfg(any(unix, windows))]
 use std::error::Error;
 
+use std::num::NonZero;
 use std::ops::Fn;
 use std::path::Path;
 use std::str::FromStr;
@@ -21,7 +22,7 @@ use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 #[cfg(any(unix, windows))]
 use rustc_fs_util::try_canonicalize;
 
-use rustc_hir::def_id::{CrateNum, LOCAL_CRATE, LocalDefId, StableCrateId};
+use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId, StableCrateId};
 use rustc_hir::definitions::Definitions;
 use rustc_index::IndexVec;
 use rustc_middle::bug;
@@ -312,6 +313,65 @@ impl CStore {
     }
 }
 
+/// Creates a minimal stub CrateMetadata for WASM proc macro crates
+///
+/// WASM proc macros don't have real .rmeta files, so we need to create
+/// synthetic metadata so that the compiler can handle queries about them.
+#[cfg(target_family = "wasm")]
+fn create_wasm_proc_macro_stub_metadata(
+    sess: &rustc_session::Session,
+    _cstore: &CStore,
+    proc_macros: &[ProcMacro],
+    cnum: CrateNum,
+    crate_name: Symbol,
+    stable_crate_id: StableCrateId,
+    _wasm_path: &std::path::Path,
+) -> CrateMetadata {
+    use rustc_data_structures::owned_slice::slice_owned;
+
+    // Create a stub CrateRoot with all empty/default fields using the helper
+    let stub_root = CrateRoot::new_wasm_proc_macro_stub(
+        TargetTuple::from_tuple(&sess.opts.target_triple.tuple()),
+        crate_name,
+        stable_crate_id,
+    );
+
+    // Create a minimal empty blob without full encoding
+    // For WASM proc macros, we don't actually need most of the metadata
+    // since queries won't be made against these crates - we only use raw_proc_macros
+
+    // Create minimal placeholder bytes (make it large enough for any decoder attempts)
+    // Must end with the magic bytes that MemDecoder expects
+    const MAGIC_END_BYTES: &[u8] = b"rust-end-file";
+    let mut dummy_bytes = vec![0u8; 4096 - MAGIC_END_BYTES.len()];
+    dummy_bytes.extend_from_slice(MAGIC_END_BYTES);
+    let owned_slice = slice_owned(dummy_bytes, std::ops::Deref::deref);
+
+    // Create MetadataBlob without validation since we won't decode from it
+    let blob = MetadataBlob::new_unvalidated(owned_slice);
+
+    // Use the stub_root directly
+    let root = stub_root;
+
+    // Create minimal CrateSource for the WASM file
+    let source = CrateSource {
+        dylib: None,
+        rlib: None,
+        rmeta: None,
+    };
+
+    // Create CrateMetadata with the stub data using the specialized constructor
+    CrateMetadata::new_wasm_proc_macro_stub(
+        blob,
+        root,
+        Some(Box::leak(proc_macros.to_vec().into_boxed_slice())),
+        cnum,
+        CrateNumMap::new(),
+        CrateDepKind::MacrosOnly,
+        source,
+    )
+}
+
 impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
     pub fn new(
         tcx: TyCtxt<'tcx>,
@@ -324,20 +384,21 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
     /// Load WASM proc macros specified via `--wasm-proc-macro` flags
     /// Returns a vector of (macro_name, SyntaxExtension) tuples for the resolver to register
     /// This bypasses the normal metadata/CStore system entirely
-    pub fn load_wasm_proc_macros(&mut self) -> Vec<(Symbol, Lrc<SyntaxExtension>)> {
+    pub fn load_wasm_proc_macros(&mut self) -> Vec<(Symbol, Lrc<SyntaxExtension>, DefId)> {
         // Only compile this code when building rustc for WASM
         #[cfg(target_family = "wasm")]
         {
             use std::fs;
             use rustc_watt_runtime::WasmMacro;
+            use rustc_span::def_id::DefId;
 
             let mut result = Vec::new();
 
             eprintln!("[CREADER] load_wasm_proc_macros called with {} entries",
                       self.sess.opts.wasm_proc_macros.len());
 
-            for (name, path) in &self.sess.opts.wasm_proc_macros {
-                eprintln!("[CREADER] Loading WASM proc macro: {} from {:?}", name, path);
+            for (file_name, path) in &self.sess.opts.wasm_proc_macros {
+                eprintln!("[CREADER] Loading WASM proc macro: {} from {:?}", file_name, path);
 
                 // Read the WASM file
                 let wasm_bytes = match fs::read(path) {
@@ -361,9 +422,49 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
 
                 eprintln!("[CREADER] Extracted {} proc macros from WASM file", proc_macros.len());
 
+                // Allocate a CrateNum for this WASM proc macro library
+                // Use a synthetic stable crate ID based on the file name
+                let crate_name_symbol = Symbol::intern(file_name);
+                let stable_crate_id = rustc_span::def_id::StableCrateId::new(
+                    crate_name_symbol,
+                    false, // is_exe
+                    vec![format!("wasm_proc_macro_{}", file_name)], // metadata
+                    env!("CFG_VERSION"), // cfg_version
+                );
+
+                // Allocate the CrateNum
+                let cnum = match self.tcx.create_crate_num(stable_crate_id) {
+                    Ok(feed) => {
+                        self.cstore.metas.push(None); // Reserve slot - will be filled below
+                        feed.key()
+                    }
+                    Err(existing) => {
+                        // If it already exists, use the existing cnum
+                        existing
+                    }
+                };
+
+                eprintln!("[CREADER] Allocated CrateNum {:?} for WASM proc macro library", cnum);
+
+                // Create stub CrateMetadata for this WASM proc macro crate
+                // This is necessary because other parts of the compiler may try to query
+                // information about this crate (e.g., dependencies during lowering)
+                let stub_metadata = create_wasm_proc_macro_stub_metadata(
+                    self.sess,
+                    self.cstore,
+                    &proc_macros,
+                    cnum,
+                    crate_name_symbol,
+                    stable_crate_id,
+                    path,
+                );
+                self.cstore.set_crate_data(cnum, stub_metadata);
+
                 // Convert ProcMacro to SyntaxExtension before passing to resolver
                 // This avoids needing proc_macro crate dependency in rustc_resolve
-                for pm in proc_macros {
+                // Assign sequential DefIndex values starting from 1 (0 is crate root)
+                let proc_macros_vec = proc_macros.into_vec();
+                for (idx, pm) in proc_macros_vec.into_iter().enumerate() {
                     let (name, kind, helper_attrs) = match pm {
                         ProcMacro::CustomDerive { trait_name, attributes, client } => {
                             let helper_attrs = attributes.iter()
@@ -407,7 +508,18 @@ impl<'a, 'tcx> CrateLoader<'a, 'tcx> {
                         collapse_debuginfo: false,
                     };
 
-                    result.push((Symbol::intern(name), Lrc::new(ext)));
+                    // Create a DefId using the allocated CrateNum
+                    // Use sequential DefIndex values starting from 1 (0 is reserved for crate root)
+                    let def_id = DefId {
+                        krate: cnum,
+                        index: rustc_span::def_id::DefIndex::from_u32((idx + 1) as u32),
+                    };
+
+                    eprintln!("[CREADER] About to intern symbol for WASM proc macro: {}", name);
+                    let name_symbol = Symbol::intern(name);
+                    eprintln!("[CREADER] Symbol interned successfully");
+
+                    result.push((name_symbol, Lrc::new(ext), def_id));
                 }
             }
 

@@ -33,12 +33,25 @@ impl ThreadState {
             Entry::Vacant(v) => v,
         };
 
+        eprintln!("[WATT DEBUG] Decoding WASM module...");
         let cursor = Cursor::new(instance.wasm_bytes());
-        let module = decode_module(cursor).unwrap();
+        let module = match decode_module(cursor) {
+            Ok(m) => {
+                eprintln!("[WATT DEBUG] Module decoded successfully");
+                m
+            }
+            Err(e) => {
+                eprintln!("[WATT DEBUG] ERROR: Failed to decode module: {:?}", e);
+                panic!("Failed to decode WASM module: {:?}", e);
+            }
+        };
         #[cfg(watt_debug)]
         print_module(&module);
+        eprintln!("[WATT DEBUG] Resolving imports...");
         let extern_vals = extern_vals(&module, &mut self.store);
+        eprintln!("[WATT DEBUG] Imports resolved, instantiating module...");
         let module_instance = instantiate_module(&mut self.store, module, &extern_vals).unwrap();
+        eprintln!("[WATT DEBUG] Module instantiated successfully");
         entry.insert(module_instance)
     }
 }

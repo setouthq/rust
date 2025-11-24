@@ -413,6 +413,21 @@ fn check_instr<'a>(
         Convert(ref convert_op) => {
             check_convert_op(operands, frames, convert_op)?;
         }
+
+        // Reference types proposal instructions (partial support for decoding only)
+        // For now, we'll just allow these through without validation
+        RefNull => {
+            // Push a null reference - we don't track reference types in validation yet
+        }
+
+        RefIsNull => {
+            // Pop a reference and push i32 - simplified validation
+            // In a full implementation, we'd pop a reference type and push i32
+        }
+
+        RefFunc(_idx) => {
+            // Push a function reference - we don't track reference types in validation yet
+        }
     }
 
     Some(())

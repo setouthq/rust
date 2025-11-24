@@ -81,7 +81,7 @@ pub const METADATA_HEADER: &[u8] = &[b'r', b'u', b's', b't', 0, 0, 0, METADATA_V
 /// Also invalid are nodes being referred in a different
 /// order than they were encoded in.
 #[must_use]
-struct LazyValue<T> {
+pub struct LazyValue<T> {
     position: NonZero<usize>,
     _marker: PhantomData<fn() -> T>,
 }
@@ -91,7 +91,7 @@ impl<T: ParameterizedOverTcx> ParameterizedOverTcx for LazyValue<T> {
 }
 
 impl<T> LazyValue<T> {
-    fn from_position(position: NonZero<usize>) -> LazyValue<T> {
+    pub fn from_position(position: NonZero<usize>) -> LazyValue<T> {
         LazyValue { position, _marker: PhantomData }
     }
 }
@@ -106,7 +106,7 @@ impl<T> LazyValue<T> {
 /// the encoding is that of `LazyArray`, with the distinction that
 /// the minimal distance the length of the sequence, i.e.
 /// it's assumed there's no 0-byte element in the sequence.
-struct LazyArray<T> {
+pub struct LazyArray<T> {
     position: NonZero<usize>,
     num_elems: usize,
     _marker: PhantomData<fn() -> T>,
@@ -123,7 +123,7 @@ impl<T> Default for LazyArray<T> {
 }
 
 impl<T> LazyArray<T> {
-    fn from_position_and_num_elems(position: NonZero<usize>, num_elems: usize) -> LazyArray<T> {
+    pub fn from_position_and_num_elems(position: NonZero<usize>, num_elems: usize) -> LazyArray<T> {
         LazyArray { position, num_elems, _marker: PhantomData }
     }
 }
@@ -133,7 +133,7 @@ impl<T> LazyArray<T> {
 /// Random-access table (i.e. offering constant-time `get`/`set`), similar to
 /// `LazyArray<T>`, but without requiring encoding or decoding all the values
 /// eagerly and in-order.
-struct LazyTable<I, T> {
+pub struct LazyTable<I, T> {
     position: NonZero<usize>,
     /// The encoded size of the elements of a table is selected at runtime to drop
     /// trailing zeroes. This is the number of bytes used for each table element.
@@ -148,7 +148,7 @@ impl<I: 'static, T: ParameterizedOverTcx> ParameterizedOverTcx for LazyTable<I, 
 }
 
 impl<I, T> LazyTable<I, T> {
-    fn from_position_and_encoded_size(
+    pub fn from_position_and_encoded_size(
         position: NonZero<usize>,
         width: usize,
         len: usize,
@@ -352,19 +352,19 @@ macro_rules! define_tables {
         - optional: $($name2:ident: Table<$IDX2:ty, $T2:ty>,)+
     ) => {
         #[derive(MetadataEncodable, MetadataDecodable)]
-        pub(crate) struct LazyTables {
+        pub struct LazyTables {
             $($name1: LazyTable<$IDX1, $T1>,)+
             $($name2: LazyTable<$IDX2, Option<$T2>>,)+
         }
 
         #[derive(Default)]
-        struct TableBuilders {
+        pub struct TableBuilders {
             $($name1: TableBuilder<$IDX1, $T1>,)+
             $($name2: TableBuilder<$IDX2, Option<$T2>>,)+
         }
 
         impl TableBuilders {
-            fn encode(&self, buf: &mut FileEncoder) -> LazyTables {
+            pub fn encode(&self, buf: &mut FileEncoder) -> LazyTables {
                 LazyTables {
                     $($name1: self.$name1.encode(buf),)+
                     $($name2: self.$name2.encode(buf),)+

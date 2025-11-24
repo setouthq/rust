@@ -3,6 +3,7 @@
 #![feature(iter_intersperse)]
 #![feature(let_chains)]
 #![feature(map_many_mut)]
+#![feature(mapped_lock_guards)]
 #![feature(rustc_attrs)]
 #![warn(unreachable_pub)]
 // tidy-alphabetical-end

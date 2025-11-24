@@ -19,7 +19,7 @@ use crate::creader::Library;
 /// Creates a synthetic `Library` for a WASM proc macro crate
 ///
 /// This creates minimal metadata by using a pre-compiled template.
-pub fn create_wasm_proc_macro_library<'tcx>(
+pub(crate) fn create_wasm_proc_macro_library<'tcx>(
     _tcx: TyCtxt<'tcx>,
     _crate_name: Symbol,
     wasm_path: &Path,

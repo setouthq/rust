@@ -24,6 +24,7 @@
 #![feature(core_io_borrowed_buf)]
 #![feature(if_let_guard)]
 #![feature(let_chains)]
+#![feature(mapped_lock_guards)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(read_buf)]
