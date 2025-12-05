@@ -428,6 +428,59 @@ fn check_instr<'a>(
         RefFunc(_idx) => {
             // Push a function reference - we don't track reference types in validation yet
         }
+
+        // Bulk memory operations (partial support for decoding only)
+        MemoryInit(_data_idx) => {
+            // memory.init: pops i32 (size), i32 (offset), i32 (dest), pushes nothing
+            require(!mod_ctx.memories.is_empty())?;
+            exact_step(operands, frames, &[Int(I32), Int(I32), Int(I32)], &[])?;
+        }
+
+        DataDrop(_data_idx) => {
+            // data.drop: no stack effects
+        }
+
+        MemoryCopy => {
+            // memory.copy: pops i32 (size), i32 (src), i32 (dest), pushes nothing
+            require(!mod_ctx.memories.is_empty())?;
+            exact_step(operands, frames, &[Int(I32), Int(I32), Int(I32)], &[])?;
+        }
+
+        MemoryFill => {
+            // memory.fill: pops i32 (size), i32 (value), i32 (dest), pushes nothing
+            require(!mod_ctx.memories.is_empty())?;
+            exact_step(operands, frames, &[Int(I32), Int(I32), Int(I32)], &[])?;
+        }
+
+        TableInit(_elem_idx, _table_idx) => {
+            // table.init: pops i32 (size), i32 (src), i32 (dest), pushes nothing
+            require(!mod_ctx.tables.is_empty())?;
+            exact_step(operands, frames, &[Int(I32), Int(I32), Int(I32)], &[])?;
+        }
+
+        ElemDrop(_elem_idx) => {
+            // elem.drop: no stack effects
+        }
+
+        TableCopy(_dst_table, _src_table) => {
+            // table.copy: pops i32 (size), i32 (src), i32 (dest)
+            // Simplified validation
+        }
+
+        TableGrow(_table_idx) => {
+            // table.grow: pops i32 (size), anyref (init) -> i32 (old_size or -1)
+            // Simplified validation
+        }
+
+        TableSize(_table_idx) => {
+            // table.size: pushes i32 (size)
+            // Simplified validation
+        }
+
+        TableFill(_table_idx) => {
+            // table.fill: pops i32 (size), anyref (value), i32 (dest)
+            // Simplified validation
+        }
     }
 
     Some(())

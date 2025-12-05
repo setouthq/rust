@@ -1,0 +1,10 @@
+
+        TableInit(_elem_idx, _table_idx) => {
+            // table.init: pops i32 (size), i32 (src), i32 (dest), pushes nothing
+            require(!mod_ctx.tables.is_empty())?;
+            exact_step(operands, frames, &[Int(I32), Int(I32), Int(I32)], &[])?;
+        }
+
+        ElemDrop(_elem_idx) => {
+            // elem.drop: no stack effects
+        }

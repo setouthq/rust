@@ -22,7 +22,7 @@ use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 #[cfg(any(unix, windows))]
 use rustc_fs_util::try_canonicalize;
 
-use rustc_hir::def_id::{CrateNum, DefId, LOCAL_CRATE, LocalDefId, StableCrateId};
+use rustc_hir::def_id::{CrateNum, DefId, DefIndex, LOCAL_CRATE, LocalDefId, StableCrateId};
 use rustc_hir::definitions::Definitions;
 use rustc_index::IndexVec;
 use rustc_middle::bug;
@@ -353,6 +353,9 @@ fn create_wasm_proc_macro_stub_metadata(
     // Use the stub_root directly
     let root = stub_root;
 
+    let _macro_def_indices: Vec<DefIndex> = (0..proc_macros.len())
+        .map(|i| DefIndex::from_u32((i + 1) as u32))
+        .collect();
     // Create minimal CrateSource for the WASM file
     let source = CrateSource {
         dylib: None,
@@ -1556,9 +1559,13 @@ fn create_wasm_proc_macros(
     }
 
     fn slot_0_derive(input: TokenStream) -> TokenStream {
+        eprintln!("[WASM SLOT] slot_0_derive called!");
         let slots = get_slots().lock().unwrap();
         let data = slots[0].as_ref().expect("Slot 0 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
+        eprintln!("[WASM SLOT] slot_0_derive called!");
+        let result = data.wasm_macro.proc_macro_derive(data.function_name, input);
+        eprintln!("[WASM SLOT] proc_macro_derive returned successfully");
+        result
     }
     fn slot_0_attr(args: TokenStream, input: TokenStream) -> TokenStream {
         let slots = get_slots().lock().unwrap();
@@ -1571,9 +1578,13 @@ fn create_wasm_proc_macros(
         data.wasm_macro.proc_macro(data.function_name, input)
     }
     fn slot_1_derive(input: TokenStream) -> TokenStream {
+        eprintln!("[WASM SLOT] slot_1_derive called!");
         let slots = get_slots().lock().unwrap();
         let data = slots[1].as_ref().expect("Slot 1 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
+        eprintln!("[WASM SLOT] About to call proc_macro_derive for {}", data.function_name);
+        let result = data.wasm_macro.proc_macro_derive(data.function_name, input);
+        eprintln!("[WASM SLOT] proc_macro_derive returned successfully");
+        result
     }
     fn slot_1_attr(args: TokenStream, input: TokenStream) -> TokenStream {
         let slots = get_slots().lock().unwrap();

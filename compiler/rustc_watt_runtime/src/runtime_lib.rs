@@ -131,7 +131,8 @@ pub fn validate_module(module: &ast::Module) -> Option<Error> {
 pub fn module_imports<'a>(
     module: &'a ast::Module,
 ) -> impl Iterator<Item = (&'a str, &'a str, types::Extern)> + 'a {
-    assert!(valid::is_valid(module));
+    let is_valid = valid::is_valid(module);
+    assert!(is_valid);
 
     module.imports.iter().map(move |import| {
         (

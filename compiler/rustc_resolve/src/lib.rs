@@ -39,6 +39,8 @@ use macros::{MacroRulesBinding, MacroRulesScope, MacroRulesScopeRef};
 use rustc_arena::{DroplessArena, TypedArena};
 use rustc_ast::expand::StrippedCfgItem;
 use rustc_ast::node_id::NodeMap;
+use rustc_session::cstore::CrateStore;
+
 use rustc_ast::{
     self as ast, AngleBracketedArg, CRATE_NODE_ID, Crate, Expr, ExprKind, GenericArg, GenericArgs,
     LitKind, NodeId, Path, attr,
@@ -1743,17 +1745,41 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     /// Register WASM proc macros loaded via `--wasm-proc-macro` flags
     /// This stores them in the `wasm_proc_macros` map and creates synthetic DefIds for lookup
     fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Lrc<SyntaxExtension>, DefId)>) {
+        let mut crates_seen: FxHashSet<CrateNum> = FxHashSet::default();
         for (name, ext, def_id) in macros {
             eprintln!("[RESOLVER] Registering WASM proc macro: {} with DefId {:?}", name, def_id);
 
             // Create MacroData from the SyntaxExtension
-            let macro_data = MacroData::new(ext);
+            let macro_data = MacroData::new(Lrc::clone(&ext));
 
             // Store in wasm_proc_macros for name-based lookup during resolution
             self.wasm_proc_macros.insert(name, macro_data);
+            self.macro_map.insert(def_id, MacroData::new(ext));
 
             // Store the DefId → name mapping for reverse lookup during resolution
             self.wasm_proc_macro_def_id_to_name.insert(def_id, name);
+            let cnum = def_id.krate;
+            if !crates_seen.contains(&cnum) {
+                crates_seen.insert(cnum);
+
+                // Get the crate name from cstore
+                //if let Some(crate_name) = self.cstore().crate_name(cnum) {
+                    let crate_name = self.cstore().crate_name(cnum); 
+                    let ident = Ident::with_dummy_span(crate_name);
+                    eprintln!("[RESOLVER] Adding {} to extern_prelude", crate_name);
+
+                    // Create a binding that points to the crate root module
+                    let crate_root = self.expect_module(cnum.as_def_id());
+                    let vis = ty::Visibility::<DefId>::Public;
+                    let binding = (crate_root, vis, DUMMY_SP, LocalExpnId::ROOT)
+                        .to_name_binding(self.arenas);
+
+                    self.extern_prelude.insert(ident, ExternPreludeEntry {
+                        binding: Some(binding),
+                        introduced_by_item: false,
+                    });
+                //}
+            }
 
             eprintln!("[RESOLVER] Successfully registered WASM proc macro {} with DefId {:?}", name, def_id);
         }

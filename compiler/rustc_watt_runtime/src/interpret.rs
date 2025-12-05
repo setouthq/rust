@@ -33,36 +33,27 @@ impl ThreadState {
             Entry::Vacant(v) => v,
         };
 
-        eprintln!("[WATT DEBUG] Decoding WASM module...");
         let cursor = Cursor::new(instance.wasm_bytes());
         let module = match decode_module(cursor) {
             Ok(m) => {
-                eprintln!("[WATT DEBUG] Module decoded successfully");
                 m
             }
             Err(e) => {
-                eprintln!("[WATT DEBUG] ERROR: Failed to decode module: {:?}", e);
                 panic!("Failed to decode WASM module: {:?}", e);
             }
         };
         #[cfg(watt_debug)]
         print_module(&module);
-        eprintln!("[WATT DEBUG] Resolving imports...");
         let extern_vals = extern_vals(&module, &mut self.store);
-        eprintln!("[WATT DEBUG] Imports resolved, instantiating module...");
         let module_instance = instantiate_module(&mut self.store, module, &extern_vals).unwrap();
-        eprintln!("[WATT DEBUG] Module instantiated successfully");
         entry.insert(module_instance)
     }
 }
 
 pub fn proc_macro(fun: &str, inputs: Vec<TokenStream>, instance: &WasmMacro) -> TokenStream {
-    eprintln!("[WATT DEBUG] proc_macro called: fun={}", fun);
     STATE.with(|state| {
         let state = &mut state.borrow_mut();
-        eprintln!("[WATT DEBUG] Getting instance...");
         let instance = state.instance(instance);
-        eprintln!("[WATT DEBUG] Collecting exports...");
         let exports = Exports::collect(instance, fun);
 
         let _guard = Data::guard();
@@ -95,40 +86,30 @@ struct Exports {
 
 impl Exports {
     fn collect(instance: &ModuleInst, entry_point: &str) -> Self {
-        eprintln!("[WATT DEBUG] Looking for entry point: {}", entry_point);
         let main = match get_export(instance, entry_point) {
             Ok(ExternVal::Func(main)) => {
-                eprintln!("[WATT DEBUG] Found main function");
                 main
             }
             _ => {
-                eprintln!("[WATT DEBUG] ERROR: unresolved macro: {:?}", entry_point);
                 unimplemented!("unresolved macro: {:?}", entry_point)
             }
         };
-        eprintln!("[WATT DEBUG] Looking for raw_to_token_stream...");
         let raw_to_token_stream = match get_export(instance, "raw_to_token_stream") {
             Ok(ExternVal::Func(func)) => {
-                eprintln!("[WATT DEBUG] Found raw_to_token_stream");
                 func
             }
             _ => {
-                eprintln!("[WATT DEBUG] ERROR: raw_to_token_stream not found");
                 unimplemented!("raw_to_token_stream not found")
             }
         };
-        eprintln!("[WATT DEBUG] Looking for token_stream_into_raw...");
         let token_stream_into_raw = match get_export(instance, "token_stream_into_raw") {
             Ok(ExternVal::Func(func)) => {
-                eprintln!("[WATT DEBUG] Found token_stream_into_raw");
                 func
             }
             _ => {
-                eprintln!("[WATT DEBUG] ERROR: token_stream_into_raw not found");
                 unimplemented!("token_stream_into_raw not found")
             }
         };
-        eprintln!("[WATT DEBUG] All exports collected successfully");
         Exports {
             main,
             raw_to_token_stream,
@@ -157,7 +138,7 @@ fn extern_vals(module: &Module, store: &mut Store) -> Vec<ExternVal> {
 
 fn mk_host_func(import: Import, store: &mut Store) -> ExternVal {
     let (module, name, ref sig) = import;
-    assert_eq!(module, "watt-0.5", "Wasm import from unknown module");
+    assert!(module == "watt-0.5" || module == "watt-0.4", "Wasm import from unknown module: {}", module);
     let func = match sig {
         Extern::Func(func) => func,
         Extern::Table(_) | Extern::Memory(_) | Extern::Global(_) => {
@@ -175,12 +156,8 @@ fn print_module(module: &Module) {
     let mut imports: Vec<_> = module_imports(module).collect();
     imports.sort_by_key(|entry| entry.1);
     for (_env, name, sig) in imports {
-        eprintln!("IMPORT {:?}: {:?}", name, sig);
     }
 
     let mut exports: Vec<_> = module_exports(module).collect();
     exports.sort_by_key(|entry| entry.0);
-    for (name, sig) in exports {
-        eprintln!("EXPORT {:?}: {:?}", name, sig);
-    }
 }
