@@ -173,13 +173,10 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     }
 
     pub(crate) fn get_macro_by_def_id(&mut self, def_id: DefId) -> &MacroData {
-        eprintln!("[RESOLVER] get_macro_by_def_id called for {:?}", def_id);
         if self.macro_map.contains_key(&def_id) {
-            eprintln!("[RESOLVER] Found in macro_map!");
             return &self.macro_map[&def_id];
         }
 
-        eprintln!("[RESOLVER] NOT found in macro_map, loading from cstore...");
         let loaded_macro = self.cstore().load_macro_untracked(def_id, self.tcx);
         let macro_data = match loaded_macro {
             LoadedMacro::MacroDef { def, ident, attrs, span, edition } => {
@@ -207,11 +204,8 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
         // Check if this is a WASM proc-macro crate
         let cnum = def_id.krate;
-        eprintln!("[RESOLVER] build_reduced_graph_external called for {:?}", def_id);
-        eprintln!("[RESOLVER]   cnum = {:?}", cnum);
         // Check if any wasm_proc_macros belong to this crate
         if def_id.index == CRATE_DEF_INDEX {
-            eprintln!("[RESOLVER]   This is a crate root, checking for WASM proc-macros");
             let macros_in_crate: Vec<_> = self.wasm_proc_macro_def_id_to_name
                 .iter()
                 .filter(|(id, _)| id.krate == cnum)
@@ -220,30 +214,24 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
             if !macros_in_crate.is_empty() && def_id == cnum.as_def_id() {
                 let crate_name = self.cstore().crate_name(cnum);
-                eprintln!("[RESOLVER] Building reduced graph for WASM proc-macro crate: {}", crate_name);
 
                 // Inject bindings for each proc macro
                 for (macro_def_id, macro_name) in macros_in_crate {
-                    eprintln!("[RESOLVER]   - About to inject {} as {:?}", macro_name, macro_def_id);
                     let res = Res::Def(DefKind::Macro(MacroKind::Derive), macro_def_id);
                     let vis = ty::Visibility::<DefId>::Public;
                     let ident = Ident::with_dummy_span(macro_name);
 
                     self.define(module, ident, MacroNS, (res, vis, DUMMY_SP, LocalExpnId::ROOT));
-                    eprintln!("[RESOLVER]   - Successfully defined {}", macro_name);
                 }
-                eprintln!("[RESOLVER] Done injecting, returning early");
 
                 return; // Don't call module_children for synthetic crate
             }
         }
 
-        eprintln!("[RESOLVER]   Calling module_children for {:?}", def_id);
         for child in self.tcx.module_children(module.def_id()) {
             let parent_scope = ParentScope::module(module, self);
             self.build_reduced_graph_for_external_crate_res(child, parent_scope)
         }
-        eprintln!("[RESOLVER]   Done with module_children for {:?}", def_id);
     }
 
     /// Builds the reduced graph for a single item in an external crate.

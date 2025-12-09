@@ -1562,7 +1562,7 @@ fn create_wasm_proc_macros(
         eprintln!("[WASM SLOT] slot_0_derive called!");
         let slots = get_slots().lock().unwrap();
         let data = slots[0].as_ref().expect("Slot 0 not initialized");
-        eprintln!("[WASM SLOT] slot_0_derive called!");
+        eprintln!("[WASM SLOT] About to call proc_macro_derive for function: {}", data.function_name);
         let result = data.wasm_macro.proc_macro_derive(data.function_name, input);
         eprintln!("[WASM SLOT] proc_macro_derive returned successfully");
         result
