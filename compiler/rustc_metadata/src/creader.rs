@@ -325,7 +325,7 @@ fn create_wasm_proc_macro_stub_metadata(
     cnum: CrateNum,
     crate_name: Symbol,
     stable_crate_id: StableCrateId,
-    _wasm_path: &std::path::Path,
+    wasm_path: &std::path::Path,
 ) -> CrateMetadata {
     use rustc_data_structures::owned_slice::slice_owned;
 
@@ -358,7 +358,7 @@ fn create_wasm_proc_macro_stub_metadata(
         .collect();
     // Create minimal CrateSource for the WASM file
     let source = CrateSource {
-        dylib: None,
+        dylib: Some((wasm_path.to_path_buf(), PathKind::All)),
         rlib: None,
         rmeta: None,
     };
