@@ -59,15 +59,15 @@ prefix = "dist"
 sysconfdir = "etc"
 
 [target.'wasm32-wasip1']
-wasi-root = "wasi-sdk-25.0-arm64-linux/share/wasi-sysroot"
-linker = "wasi-sdk-25.0-arm64-linux/bin/clang"
+wasi-root = "wasi-sdk-29.0-arm64-linux/share/wasi-sysroot"
+linker = "wasi-sdk-29.0-arm64-linux/bin/clang"
 #wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
 #linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
 codegen-backends = ["llvm"]
 
 [target.'wasm32-wasip1-threads']
-wasi-root = "wasi-sdk-25.0-arm64-linux/share/wasi-sysroot"
-linker = "wasi-sdk-25.0-arm64-linux/bin/clang"
+wasi-root = "wasi-sdk-29.0-arm64-linux/share/wasi-sysroot"
+linker = "wasi-sdk-29.0-arm64-linux/bin/clang"
 #wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
 #linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
 codegen-backends = ["llvm"]
