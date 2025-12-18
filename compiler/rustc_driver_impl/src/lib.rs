@@ -1378,7 +1378,7 @@ fn ice_path_with_config(config: Option<&UnstableOptions>) -> &'static Option<Pat
                 &format_description!("[year]-[month]-[day]T[hour]_[minute]_[second]"),
             )
             .unwrap_or_default();
-        let pid = std::process::id();
+        let pid = if cfg!(target_family = "wasm") { 1 } else { std::process::id() };
         path.push(format!("rustc-ice-{file_now}-{pid}.txt"));
         Some(path)
     })

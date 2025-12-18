@@ -95,10 +95,17 @@ pub fn link_binary(
         });
 
         if outputs.outputs.should_link() {
-            let tmpdir = TempFileBuilder::new()
-                .prefix("rustc")
-                .tempdir()
-                .unwrap_or_else(|error| sess.dcx().emit_fatal(errors::CreateTempDir { error }));
+            let tmpdir = if cfg!(target_family = "wasm") {
+                TempFileBuilder::new()
+                    .prefix("rustc")
+                    .tempdir_in(std::env::current_dir().unwrap())
+                    .unwrap_or_else(|error| sess.dcx().emit_fatal(errors::CreateTempDir { error }))
+            } else {
+                TempFileBuilder::new()
+                    .prefix("rustc")
+                    .tempdir()
+                    .unwrap_or_else(|error| sess.dcx().emit_fatal(errors::CreateTempDir { error }))
+            };
             let path = MaybeTempDir::new(tmpdir, sess.opts.cg.save_temps);
             let output = out_filename(
                 sess,
@@ -820,6 +827,30 @@ fn link_natively(
 
     // Invoke the system linker
     info!("{cmd:?}");
+
+    // If WASI, linking
+    #[cfg(target_os = "wasi")]
+    if matches!(flavor, LinkerFlavor::Gnu(Cc::No, Lld::Yes) | LinkerFlavor::WasmLld(Cc::No)) {
+        extern "C" {
+            fn RustRunLld(
+                argc: std::ffi::c_int,
+                argv: *const *const std::ffi::c_char,
+            ) -> std::ffi::c_int;
+        }
+
+        let cmd = cmd.command();
+        println!("Linking using {cmd:?}");
+        let mut args = cmd
+            .get_args()
+            .map(|arg| std::ffi::CString::new(arg.as_encoded_bytes()).unwrap())
+            .collect::<Vec<_>>();
+        args.insert(0, std::ffi::CString::new(cmd.get_program().as_encoded_bytes()).unwrap());
+        let argv = args.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+
+        let ret = unsafe { RustRunLld(args.len() as std::ffi::c_int, argv.as_ptr()) };
+        std::process::exit(ret);
+    }
+
     let retry_on_segfault = env::var("RUSTC_RETRY_LINKER_ON_SEGFAULT").is_ok();
     let unknown_arg_regex =
         Regex::new(r"(unknown|unrecognized) (command line )?(option|argument)").unwrap();

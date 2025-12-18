@@ -97,4 +97,7 @@ flake.nix
 flake.lock
 default.nix
 
+## wasi-sdk
+/wasi-sdk-*
+
 # Before adding new lines, see the comment at the top.
