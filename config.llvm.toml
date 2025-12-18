@@ -1,0 +1,82 @@
+# Includes one of the default files in src/bootstrap/defaults
+profile = "compiler"
+change-id = 9999999
+
+[rust]
+codegen-backends = ["llvm"]
+deny-warnings = false
+llvm-bitcode-linker = false
+debug = false
+debuginfo-level = 0
+optimize = "s"
+strip = true
+codegen-units = 1
+codegen-units-std = 1
+llvm-tools = false
+channel = "stable"
+#lto = "thin"
+
+[llvm]
+static-libstdcpp = true
+ninja = false
+download-ci-llvm = false
+link-shared = false
+targets = "AArch64;WebAssembly"
+#targets = "WebAssembly;X86"
+#targets = "AArch64;WebAssembly;X86"
+#targets = "AArch64;ARM;RISCV;WebAssembly;X86"
+#targets = "WebAssembly;X86"
+experimental-targets = ""
+optimize = true
+release-debuginfo = false
+#thin-lto = true
+
+[build]
+docs = false
+extended = false
+tools = []
+host = ["wasm32-wasip1-threads"]
+target = ["wasm32-wasip1"]
+    #"wasm32-wasip1",
+    #"aarch64-apple-darwin"
+    #"wasm32-wasip1-threads",
+    #"wasm32-unknown-unknown",
+    #"x86_64-unknown-linux-gnu",
+    #"aarch64-unknown-linux-gnu",
+    #"x86_64-pc-windows-gnu",
+    #"x86_64-pc-windows-msvc",
+    #"x86_64-apple-darwin"
+#]
+#target = ["x86_64-unknown-linux-gnu", "wasm32-wasip1"]
+cargo-native-static = true
+#cargo = "/root/.cargo/bin/cargo"
+#cargo-clippy = "/root/.cargo/bin/cargo-clippy"
+#rustc = "/root/.cargo/bin/rustc"
+#rustfmt = "/root/.cargo/bin/rustfmt"
+
+[install]
+prefix = "dist"
+sysconfdir = "etc"
+
+[target.'wasm32-wasip1']
+wasi-root = "wasi-sdk-25.0-arm64-linux/share/wasi-sysroot"
+linker = "wasi-sdk-25.0-arm64-linux/bin/clang"
+#wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
+#linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
+codegen-backends = ["llvm"]
+
+[target.'wasm32-wasip1-threads']
+wasi-root = "wasi-sdk-25.0-arm64-linux/share/wasi-sysroot"
+linker = "wasi-sdk-25.0-arm64-linux/bin/clang"
+#wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
+#linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
+codegen-backends = ["llvm"]
+
+[target.'x86_64-unknown-linux-gnu']
+cc = "gcc"
+
+[target.'aarch64-unknown-linux-gnu']
+cc = "gcc"
+
+#llvm-config = "build-prev/aarch64-unknown-linux-gnu/llvm/bin/llvm-config"
+

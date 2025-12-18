@@ -866,6 +866,11 @@ impl Build {
         if (self.config.llvm_enabled(target) || kind == Kind::Check) && check("llvm") {
             features.push("llvm");
         }
+        if self.config.codegen_backends(target).contains(&"cranelift".to_owned())
+            || kind == Kind::Check
+        {
+            features.push("cranelift");
+        }
         if self.config.llvm_enzyme {
             features.push("llvm_enzyme");
         }

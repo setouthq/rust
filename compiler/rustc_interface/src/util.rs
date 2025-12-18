@@ -333,6 +333,8 @@ pub fn get_codegen_backend(
             "dummy" => || Box::new(DummyCodegenBackend),
             #[cfg(feature = "llvm")]
             "llvm" => rustc_codegen_llvm::LlvmCodegenBackend::new,
+            #[cfg(feature = "cranelift")]
+            "cranelift" => rustc_codegen_cranelift::__rustc_codegen_backend,
             backend_name => get_codegen_sysroot(early_dcx, sysroot, backend_name),
         }
     });
