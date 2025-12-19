@@ -27,6 +27,9 @@ use rustc_middle::ty::{Feed, Visibility};
 use rustc_middle::{bug, span_bug};
 use rustc_span::hygiene::{ExpnId, LocalExpnId, MacroKind};
 use rustc_span::{Ident, Macros20NormalizedIdent, Span, Symbol, kw, sym};
+use rustc_session::cstore::CrateStore;
+use rustc_span::{DUMMY_SP, Span};
+use rustc_span::def_id::CRATE_DEF_INDEX;
 use thin_vec::ThinVec;
 use tracing::debug;
 
@@ -232,6 +235,33 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     }
 
     pub(crate) fn build_reduced_graph_external(&self, module: Module<'ra>) {
+        let def_id = module.def_id();
+
+        // Check if this is a WASM proc-macro crate
+        let cnum = def_id.krate;
+        // Check if any wasm_proc_macros belong to this crate
+        if def_id.index == CRATE_DEF_INDEX {
+            let macros_in_crate: Vec<_> = self.wasm_proc_macro_def_id_to_name
+                .iter()
+                .filter(|(id, _)| id.krate == cnum)
+                .map(|(id, name)| (*id, *name))  // Copy the values out
+                .collect();
+
+            if !macros_in_crate.is_empty() && def_id == cnum.as_def_id() {
+                let crate_name = self.cstore().crate_name(cnum);
+
+                // Inject bindings for each proc macro
+                for (macro_def_id, macro_name) in macros_in_crate {
+                    let res = Res::Def(DefKind::Macro(MacroKind::Derive), macro_def_id);
+                    let vis = ty::Visibility::<DefId>::Public;
+                    let ident = Ident::with_dummy_span(macro_name);
+
+                    self.define(module, ident, MacroNS, (res, vis, DUMMY_SP, LocalExpnId::ROOT));
+                }
+
+                return; // Don't call module_children for synthetic crate
+            }
+        }
         for (i, child) in self.tcx.module_children(module.def_id()).into_iter().enumerate() {
             let parent_scope = ParentScope::module(module, self.arenas);
             self.build_reduced_graph_for_external_crate_res(child, parent_scope, i)

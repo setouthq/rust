@@ -47,6 +47,7 @@
 #![feature(gen_blocks)]
 #![feature(if_let_guard)]
 #![feature(intra_doc_pointers)]
+#![feature(mapped_lock_guards)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(never_type)]

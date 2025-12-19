@@ -461,7 +461,10 @@ impl<'a> GccLinker<'a> {
                 self.link_arg("-install_name").link_arg(rpath);
             }
         } else {
-            self.link_or_cc_arg("-shared");
+            // WASM doesn't support -shared flag for shared libraries yet
+            if !self.sess.target.is_like_wasm {
+                self.link_or_cc_arg("-shared");
+            }
             if let Some(name) = out_filename.file_name() {
                 if self.sess.target.is_like_windows {
                     // The output filename already contains `dll_suffix` so

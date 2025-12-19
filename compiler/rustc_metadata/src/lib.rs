@@ -8,6 +8,7 @@
 #![feature(gen_blocks)]
 #![feature(if_let_guard)]
 #![feature(macro_metavar_expr)]
+#![feature(mapped_lock_guards)]
 #![feature(min_specialization)]
 #![feature(never_type)]
 #![feature(proc_macro_internals)]
@@ -21,6 +22,7 @@ mod dependency_format;
 mod foreign_modules;
 mod native_libs;
 mod rmeta;
+mod wasm_synthetic;
 
 pub mod creader;
 pub mod errors;

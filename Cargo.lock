@@ -4328,7 +4328,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "synstructure",
+ "synstructure 0.13.2 (git+https://github.com/macovedj/synstructure)",
 ]
 
 [[package]]
@@ -4359,6 +4359,7 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "rustc_target",
+ "rustc_watt_runtime",
  "tempfile",
  "tracing",
 ]
@@ -4951,7 +4952,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "synstructure",
+ "synstructure 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -4962,6 +4963,10 @@ checksum = "cfcb3a22ef46e85b45de6ee7e79d063319ebb6594faafcf1c225ea92ab6e9b92"
 dependencies = [
  "semver",
 ]
+
+[[package]]
+name = "rustc_watt_runtime"
+version = "0.0.0"
 
 [[package]]
 name = "rustc_windows_rc"
@@ -5517,6 +5522,16 @@ name = "synstructure"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
+]
+
+[[package]]
+name = "synstructure"
+version = "0.13.2"
+source = "git+https://github.com/macovedj/synstructure#cf719efe5d0249ee599823f0c723e0f852b62369"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -6973,7 +6988,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "synstructure",
+ "synstructure 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -7014,7 +7029,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.106",
- "synstructure",
+ "synstructure 0.13.2 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]

@@ -1,0 +1,9 @@
+[package]
+name = "rustc_watt_runtime"
+version = "0.0.0"
+edition = "2021"
+description = "WebAssembly runtime for executing procedural macros (vendored from watt)"
+
+# This crate has zero external dependencies, matching the original watt design
+[dependencies]
+# No external dependencies - only uses std and proc_macro

@@ -30,6 +30,12 @@
 use std::collections::HashMap;
 use std::hash::{BuildHasher, Hash};
 
+#[cfg(target_family = "wasm")]
+pub use std::sync::{
+    MappedRwLockReadGuard as MappedReadGuard, MappedRwLockWriteGuard as MappedWriteGuard,
+    RwLockReadGuard as ReadGuard, RwLockWriteGuard as WriteGuard,
+};
+#[cfg(not(target_family = "wasm"))]
 pub use parking_lot::{
     MappedRwLockReadGuard as MappedReadGuard, MappedRwLockWriteGuard as MappedWriteGuard,
     RwLockReadGuard as ReadGuard, RwLockWriteGuard as WriteGuard,
@@ -157,6 +163,11 @@ impl<K: Eq + Hash, V: Eq, S: BuildHasher> HashMapExt<K, V> for HashMap<K, V, S> 
     }
 }
 
+// On WASM, parking_lot doesn't support thread parking, so use std::sync::RwLock
+#[cfg(target_family = "wasm")]
+#[derive(Debug, Default)]
+pub struct RwLock<T>(std::sync::RwLock<T>);
+#[cfg(not(target_family = "wasm"))]
 #[derive(Debug, Default)]
 pub struct RwLock<T>(parking_lot::RwLock<T>);
 
@@ -168,34 +179,65 @@ impl<T> RwLock<T> {
 
     #[inline(always)]
     pub fn into_inner(self) -> T {
-        self.0.into_inner()
+        #[cfg(target_family = "wasm")]
+        return self.0.into_inner().expect("RwLock poisoned");
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.into_inner();
     }
 
     #[inline(always)]
     pub fn get_mut(&mut self) -> &mut T {
-        self.0.get_mut()
+        #[cfg(target_family = "wasm")]
+        return self.0.get_mut().expect("RwLock poisoned");
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.get_mut();
     }
 
     #[inline(always)]
     pub fn read(&self) -> ReadGuard<'_, T> {
-        if ERROR_CHECKING {
-            self.0.try_read().expect("lock was already held")
-        } else {
-            self.0.read()
+        #[cfg(target_family = "wasm")]
+        {
+            if ERROR_CHECKING {
+                self.0.try_read().expect("lock was already held")
+            } else {
+                self.0.read().expect("RwLock poisoned")
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ERROR_CHECKING {
+                self.0.try_read().expect("lock was already held")
+            } else {
+                self.0.read()
+            }
         }
     }
 
     #[inline(always)]
     pub fn try_write(&self) -> Result<WriteGuard<'_, T>, ()> {
-        self.0.try_write().ok_or(())
+        #[cfg(target_family = "wasm")]
+        return self.0.try_write().map_err(|_| ());
+        #[cfg(not(target_family = "wasm"))]
+        return self.0.try_write().ok_or(());
     }
 
     #[inline(always)]
     pub fn write(&self) -> WriteGuard<'_, T> {
-        if ERROR_CHECKING {
-            self.0.try_write().expect("lock was already held")
-        } else {
-            self.0.write()
+        #[cfg(target_family = "wasm")]
+        {
+            if ERROR_CHECKING {
+                self.0.try_write().expect("lock was already held or poisoned")
+            } else {
+                self.0.write().expect("RwLock poisoned")
+            }
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            if ERROR_CHECKING {
+                self.0.try_write().expect("lock was already held")
+            } else {
+                self.0.write()
+            }
         }
     }
 
