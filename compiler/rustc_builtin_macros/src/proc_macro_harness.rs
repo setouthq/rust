@@ -2,6 +2,7 @@ use std::{mem, slice};
 
 use rustc_ast::visit::{self, Visitor};
 use rustc_ast::{self as ast, HasNodeId, NodeId, attr};
+use rustc_ast::ptr::P;
 use rustc_ast_pretty::pprust;
 use rustc_attr_parsing::AttributeParser;
 use rustc_errors::DiagCtxtHandle;
@@ -411,7 +412,7 @@ fn mk_decls(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> Box<ast::Item> {
 // by the watt runtime loader. The metadata is embedded as a byte array with
 // #[link_section] to place it in a custom WASM section.
 //
-// Format: "derive:TraitName:function_name[:attributes]\nattr:name:function_name\n..."
+// Format: "derive:TraitName:function_ident[:attributes]\nattr:name:function_ident\n..."
 fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> {
     let expn_id = cx.resolver.expansion_for_ast_pass(
         DUMMY_SP,
@@ -429,7 +430,7 @@ fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> 
                 metadata.push_str("derive:");
                 metadata.push_str(&cd.trait_name.as_str());
                 metadata.push(':');
-                metadata.push_str(&cd.function_name.as_str());
+                metadata.push_str(&cd.function_ident.as_str());
                 if !cd.attrs.is_empty() {
                     metadata.push(':');
                     for (i, attr) in cd.attrs.iter().enumerate() {
@@ -443,16 +444,16 @@ fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> 
             }
             ProcMacro::Attr(ca) => {
                 metadata.push_str("attr:");
-                metadata.push_str(&ca.function_name.as_str());
+                metadata.push_str(&ca.function_ident.as_str());
                 metadata.push(':');
-                metadata.push_str(&ca.function_name.as_str());
+                metadata.push_str(&ca.function_ident.as_str());
                 metadata.push('\n');
             }
             ProcMacro::Bang(ca) => {
                 metadata.push_str("bang:");
-                metadata.push_str(&ca.function_name.as_str());
+                metadata.push_str(&ca.function_ident.as_str());
                 metadata.push(':');
-                metadata.push_str(&ca.function_name.as_str());
+                metadata.push_str(&ca.function_ident.as_str());
                 metadata.push('\n');
             }
         }
@@ -496,7 +497,7 @@ fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> 
     // #[link_section = ".rustc_proc_macro_decls"]
     // #[used]
     // static WASM_METADATA: [u8; N] = [byte_literals...];
-    let item = cx.item_static(
+    let mut item = cx.item_static(
         span,
         Ident::new(Symbol::intern("WASM_METADATA"), span),
         cx.ty(
@@ -508,18 +509,15 @@ fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> 
         ),
         ast::Mutability::Not,
         array_expr,
-    )
-    .map(|mut item| {
-        // Add #[link_section = ".rustc_proc_macro_decls"]
-        item.attrs.push(cx.attr_name_value_str(
-            sym::link_section,
-            Symbol::intern(".rustc_proc_macro_decls"),
-            span,
-        ));
-        // Add #[used]
-        item.attrs.push(cx.attr_word(sym::used, span));
-        item
-    });
+    );
+    // Add #[link_section = ".rustc_proc_macro_decls"]
+    item.attrs.push(cx.attr_name_value_str(
+        sym::link_section,
+        Symbol::intern(".rustc_proc_macro_decls"),
+        span,
+    ));
+    // Add #[used]
+    item.attrs.push(cx.attr_word(sym::used, span));
 
     // Wrap in const _: () = { ... };
     let block = cx.expr_block(cx.block(span, thin_vec![cx.stmt_item(span, item)]));
