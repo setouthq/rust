@@ -17,6 +17,8 @@ channel = "stable"
 #lto = "thin"
 
 [llvm]
+cflags = "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
+cxxflags = "-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
 static-libstdcpp = true
 ninja = false
 download-ci-llvm = false
@@ -59,17 +61,15 @@ prefix = "dist"
 sysconfdir = "etc"
 
 [target.'wasm32-wasip1']
-wasi-root = "wasi-sdk-29.0-arm64-linux/share/wasi-sysroot"
-linker = "wasi-sdk-29.0-arm64-linux/bin/clang"
+wasi-root = "wasi-sdk-28.0-arm64-linux/share/wasi-sysroot"
+linker = "wasi-sdk-28.0-arm64-linux/bin/clang"
 #wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
 #linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
 codegen-backends = ["llvm"]
 
 [target.'wasm32-wasip1-threads']
-wasi-root = "wasi-sdk-29.0-arm64-linux/share/wasi-sysroot"
-linker = "wasi-sdk-29.0-arm64-linux/bin/clang"
-#wasi-root = "wasi-sdk-24.0-arm64-linux/share/wasi-sysroot"
-#linker = "wasi-sdk-24.0-arm64-linux/bin/clang"
+wasi-root = "wasi-sdk-28.0-arm64-linux/share/wasi-sysroot"
+linker = "/home/ubuntu/1.92/rust/wasi-clang-wrapper.sh"
 codegen-backends = ["llvm"]
 
 [target.'x86_64-unknown-linux-gnu']

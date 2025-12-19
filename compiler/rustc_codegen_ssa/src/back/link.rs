@@ -743,7 +743,7 @@ fn link_natively(
     // If WASI, linking
     #[cfg(target_os = "wasi")]
     if matches!(flavor, LinkerFlavor::Gnu(Cc::No, Lld::Yes) | LinkerFlavor::WasmLld(Cc::No)) {
-        extern "C" {
+        unsafe extern "C" {
             fn RustRunLld(
                 argc: std::ffi::c_int,
                 argv: *const *const std::ffi::c_char,

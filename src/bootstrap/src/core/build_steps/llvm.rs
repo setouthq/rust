@@ -550,7 +550,9 @@ impl Step for Llvm {
             // LLVM has some (unreachable in our configuration) calls to mmap.
             wasi_cflags_llvm.push_str(" -D_WASI_EMULATED_MMAN");
             wasi_ldflags_llvm.push_str(" -lwasi-emulated-mman");
+            wasi_cflags_llvm.push_str(" -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS");
             // Depending on the code being compiled, both Clang and LLD can consume unbounded amounts of memory.
+            wasi_ldflags_llvm.push_str(" -lwasi-emulated-signal -lwasi-emulated-process-clocks");
             wasi_ldflags_llvm.push_str(" -Wl,--max-memory=4294967296");
             // Compiling C++ code requires a lot of stack space and can overflow and corrupt the heap.
             // (For example, `#include <iostream>` alone does it in a build with the default stack size.)

@@ -248,6 +248,12 @@ pub(crate) fn default_sysroot() -> PathBuf {
         rustlib_path.exists().then_some(p)
     }
 
-    from_env_args_next()
-        .unwrap_or_else(|| default_from_rustc_driver_dll().expect("Failed finding sysroot"))
+    from_env_args_next().or_else(|| {
+        // Check RUST_SYSROOT env var before trying DLL path detection (needed for WASI)
+        std::env::var_os("RUST_SYSROOT").map(PathBuf::from)
+    }).unwrap_or_else(|| {
+        default_from_rustc_driver_dll().expect(
+            "Failed finding sysroot. Set RUST_SYSROOT environment variable."
+        )
+    })
 }
