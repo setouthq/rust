@@ -174,7 +174,10 @@ pub struct RwLock<T>(parking_lot::RwLock<T>);
 impl<T> RwLock<T> {
     #[inline(always)]
     pub fn new(inner: T) -> Self {
-        RwLock(parking_lot::RwLock::new(inner))
+        #[cfg(target_family = "wasm")]
+            return RwLock(std::sync::RwLock::new(inner));
+        #[cfg(not(target_family = "wasm"))]
+            return RwLock(parking_lot::RwLock::new(inner));
     }
 
     #[inline(always)]

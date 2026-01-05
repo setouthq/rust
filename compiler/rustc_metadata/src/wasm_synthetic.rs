@@ -22,7 +22,7 @@ pub(crate) fn create_wasm_proc_macro_library<'tcx>(
     _tcx: TyCtxt<'tcx>,
     _crate_name: Symbol,
     wasm_path: &Path,
-    _proc_macros: &[proc_macro::bridge::client::ProcMacro],
+    _proc_macros: &[rustc_proc_macro::bridge::client::ProcMacro],
 ) -> Library {
     eprintln!("[WASM_SYNTHETIC] Loading template metadata for WASM proc macro");
 

@@ -47,7 +47,7 @@
     clippy::wrong_self_convention
 )]
 
-extern crate proc_macro;
+extern crate rustc_proc_macro as proc_macro;
 
 // Use the interpreter-based execution
 #[path = "interpret.rs"]

@@ -983,6 +983,7 @@ impl CrateRoot {
                 hash: Svh::new(Fingerprint::ZERO),
                 name,
                 is_proc_macro_crate: true,
+                is_stub: false
             },
             extra_filename: String::new(),
             stable_crate_id,
@@ -1021,15 +1022,14 @@ impl CrateRoot {
                 attr_flags: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 def_path_hashes: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 explicit_item_bounds: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
-                explicit_item_super_predicates: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 inferred_outlives_of: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 explicit_super_predicates_of: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 explicit_implied_predicates_of: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 explicit_implied_const_bounds: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 inherent_impls: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
-                associated_types_for_impl_traits_in_associated_fn: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                associated_types_for_impl_traits_in_trait_or_impl: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 opt_rpitit_info: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
-                unused_generic_params: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                explicit_item_self_bounds: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 module_children_reexports: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 cross_crate_inlinable: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 attributes: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
@@ -1067,13 +1067,13 @@ impl CrateRoot {
                 rendered_const: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 rendered_precise_capturing_args: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 asyncness: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
-                fn_arg_names: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                fn_arg_idents: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 coroutine_kind: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 coroutine_for_closure: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 coroutine_by_move_body_def_id: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 eval_static_initializer: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 trait_def: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
-                trait_item_def_id: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                safety: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 expn_that_defined: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 params_in_repr: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 repr_options: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
@@ -1089,10 +1089,18 @@ impl CrateRoot {
                 doc_link_traits_in_scope: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 assumed_wf_types_for_rpitit: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
                 opaque_ty_origin: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                anon_const_kind: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                adt_destructor: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                adt_async_destructor: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+                default_fields: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
             },
 
             debugger_visualizers: LazyArray::default(),
-            exported_symbols: LazyArray::default(),
+
+            exportable_items: LazyArray::default(),
+            stable_order_of_exportable_impls: LazyArray::default(),
+            exported_non_generic_symbols: LazyArray::default(),
+            exported_generic_symbols: LazyArray::default(),
 
             syntax_contexts: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
             expn_data: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
@@ -1101,6 +1109,7 @@ impl CrateRoot {
             def_path_hash_map: LazyValue::from_position(NonZero::new(1).unwrap()),
 
             source_map: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+            target_modifiers: LazyArray::default(),
 
             compiler_builtins: false,
             needs_allocator: false,
@@ -1160,6 +1169,15 @@ impl<'a> CrateMetadataRef<'a> {
             .unwrap()
             .macros
             .decode(self);
+
+        let pos = if macros_iter.len() == 0 {
+            // WASM stub: DefIndex 1, 2, 3... maps to array index 0, 1, 2...
+            (id.as_u32() - 1) as usize
+        } else {
+            // Regular proc macro crate: search for the DefIndex
+            macros_iter.position(|i| i == id).unwrap()
+        };
+
         &self.raw_proc_macros.unwrap()[pos]
     }
 
@@ -1230,7 +1248,7 @@ impl<'a> CrateMetadataRef<'a> {
                                 ProcMacro::Attr { .. } => MacroKind::Attr,
                                 ProcMacro::Bang { .. } => MacroKind::Bang,
                             };
-                            return DefKind::Macro(macro_kind);
+                            return DefKind::Macro(macro_kind.into());
                         }
                     }
                 }
@@ -1803,6 +1821,14 @@ impl<'a> CrateMetadataRef<'a> {
 
     #[inline]
     fn def_path_hash(self, index: DefIndex) -> DefPathHash {
+        // For WASM proc macro crates, generate synthetic unique hashes based on DefIndex
+        // since we don't have real metadata to decode from
+        if self.raw_proc_macros.is_some() {
+            // Use the DefIndex as the local hash to ensure uniqueness
+            let local_hash = rustc_hashes::Hash64::new(index.as_u32() as u64);
+            return DefPathHash::new(self.root.stable_crate_id, local_hash);
+        }
+        
         // This is a hack to workaround the fact that we can't easily encode/decode a Hash64
         // into the FixedSizeEncoding, as Hash64 lacks a Default impl. A future refactor to
         // relax the Default restriction will likely fix this.
@@ -2130,25 +2156,39 @@ impl CrateMetadata {
         cnum_map: CrateNumMap,
         dep_kind: CrateDepKind,
         source: CrateSource,
+        stable_crate_id: StableCrateId,
+        proc_macro_count: usize,
     ) -> CrateMetadata {
         use rustc_data_structures::owned_slice::slice_owned;
         use rustc_data_structures::sync::Lock;
-        use rustc_data_structures::sync::Lrc;
+        use std::sync::Arc;
         use rustc_hir::def_path_hash_map::Config as HashMapConfig;
+        use rustc_hashes::Hash64;
+        use rustc_span::def_id::DefIndex;
 
-        // Create an empty DefPathHashMap by using an actual empty HashTableOwned
-        // and converting its raw bytes to an OwnedSlice
-        // with_capacity needs (capacity, max_load_factor_percent)
-        // The load factor must be > 0, so use a reasonable value like 80
-        let empty_table: rustc_hir::def_path_hash_map::DefPathHashMap =
-            odht::HashTableOwned::with_capacity(0, 80u8);
-        let raw_bytes = empty_table.raw_bytes();
+        // Create DefPathHashMap with entries for each proc macro
+        // The hash map uses Hash64 (local hash) as key and DefIndex as value
+        // DefIndex 0 is the crate root, DefIndex 1..=proc_macro_count are the macros
+        let capacity = proc_macro_count + 1; // +1 for crate root
+        let mut hash_table: rustc_hir::def_path_hash_map::DefPathHashMap =
+            odht::HashTableOwned::with_capacity(capacity, 80u8);
+        
+        // Add entry for crate root (DefIndex 0) with local hash 0
+        let root_local_hash = Hash64::new(0);
+        hash_table.insert(&root_local_hash, &DefIndex::from_u32(0));
+        
+        // Add entries for each proc macro (DefIndex 1..=proc_macro_count)
+        // Each gets a unique local hash based on its index
+        for i in 1..=proc_macro_count {
+            let local_hash = Hash64::new(i as u64);
+            hash_table.insert(&local_hash, &DefIndex::from_u32(i as u32));
+        }
+
+        let raw_bytes = hash_table.raw_bytes();
         let owned_slice = slice_owned(raw_bytes.to_vec(), std::ops::Deref::deref);
-
-        // Now create the DefPathHashMapRef from these valid empty bytes
         let def_path_hash_map = odht::HashTable::<HashMapConfig, _>::from_raw_bytes(owned_slice)
             .map(DefPathHashMapRef::OwnedFromMetadata)
-            .expect("Failed to create DefPathHashMapRef from empty HashTableOwned bytes");
+            .expect("Failed to create DefPathHashMapRef with proc macro entries");
 
         // For WASM proc macros, skip all decoding - just create empty structures
         // Use Lock::new_no_sync() to avoid parking_lot issues on WASM
@@ -2166,7 +2206,7 @@ impl CrateMetadata {
             cnum_map,
             dependencies: Vec::new(),
             dep_kind,
-            source: Lrc::new(source),
+            source: Arc::new(source),
             private_dep: false,
             host_hash: None,
             used: false,

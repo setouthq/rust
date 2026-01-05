@@ -2,7 +2,6 @@ use std::{mem, slice};
 
 use rustc_ast::visit::{self, Visitor};
 use rustc_ast::{self as ast, HasNodeId, NodeId, attr};
-use rustc_ast::ptr::P;
 use rustc_ast_pretty::pprust;
 use rustc_attr_parsing::AttributeParser;
 use rustc_errors::DiagCtxtHandle;
@@ -413,7 +412,8 @@ fn mk_decls(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> Box<ast::Item> {
 // #[link_section] to place it in a custom WASM section.
 //
 // Format: "derive:TraitName:function_ident[:attributes]\nattr:name:function_ident\n..."
-fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> {
+#[allow(rustc::symbol_intern_string_literal)]
+fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> Box<ast::Item> {
     let expn_id = cx.resolver.expansion_for_ast_pass(
         DUMMY_SP,
         AstPass::ProcMacroHarness,
@@ -474,7 +474,7 @@ fn mk_wasm_metadata(cx: &mut ExtCtxt<'_>, macros: &[ProcMacro]) -> P<ast::Item> 
                 Symbol::intern(&format!("{}", byte)),
                 Some(sym::u8),
             );
-            P(ast::Expr {
+            Box::new(ast::Expr {
                 id: ast::DUMMY_NODE_ID,
                 kind: ast::ExprKind::Lit(lit),
                 span,

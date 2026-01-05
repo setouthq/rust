@@ -3,7 +3,7 @@ use Namespace::*;
 use rustc_ast::{self as ast, NodeId};
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{DefKind, MacroKinds, Namespace, NonMacroAttrKind, PartialRes, PerNS};
-use rustc_middle::{bug, span_bug};
+use rustc_middle::{bug, span_bug, ty::Visibility};
 use rustc_session::lint::builtin::PROC_MACRO_DERIVE_RESOLUTION_FALLBACK;
 use rustc_session::parse::feature_err;
 use rustc_span::hygiene::{ExpnId, ExpnKind, LocalExpnId, MacroKind, SyntaxContext};
@@ -558,9 +558,8 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                             eprintln!("[RESOLVER] Using DefId {:?} for WASM proc macro {}", def_id, ident.name);
 
                             // Create a NameBinding with the unique DefId
-                            let res = Res::Def(DefKind::Macro(MacroKind::Derive), def_id);
-                            let binding = (res, Visibility::Public, ident.span, LocalExpnId::ROOT)
-                                .to_name_binding(this.arenas);
+                            let res = Res::Def(DefKind::Macro(MacroKind::Derive.into()), def_id);
+                            let binding = this.arenas.new_pub_res_binding(res, ident.span, LocalExpnId::ROOT);
                             // Return early with the binding and flags
                             Ok((binding, Flags::MISC_FROM_PRELUDE))
                         } else {
@@ -670,7 +669,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         // or in late resolution when everything is already imported and expanded
                         // and no ambiguities exist.
                         if matches!(finalize, None | Some(Finalize { stage: Stage::Late, .. })) {
-                            return Some(Ok(binding, flags));
+                            return Some(Ok(binding));
                         }
 
                         if let Some((innermost_binding, innermost_flags)) = innermost_result {
@@ -753,7 +752,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                                         misc1: misc(innermost_flags),
                                         misc2: misc(flags),
                                     });
-                                    return Some(Ok(innermost_binding, innermost_flags));
+                                    return Some(Ok(innermost_binding));
                                 }
                             }
                         } else {
@@ -770,8 +769,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         );
 
         if let Some(break_result) = break_result {
-            return break_result
-            .map(|(binding, _)| binding)
+            return break_result;
         }
 
         // The first found solution was the only one, return it.

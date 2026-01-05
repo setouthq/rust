@@ -7,15 +7,18 @@ use std::path::Path;
 use std::str::FromStr;
 use std::num::NonZero;
 use std::{cmp, env, iter};
+use rustc_target::spec::TargetTuple;
+use rustc_proc_macro::bridge::client::ProcMacro;
 
 use rustc_ast::expand::allocator::{ALLOC_ERROR_HANDLER, AllocatorKind, global_fn_name};
 use rustc_ast::{self as ast, *};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::owned_slice::OwnedSlice;
 use rustc_data_structures::svh::Svh;
-use rustc_data_structures::sync::{self, FreezeReadGuard, FreezeWriteGuard, Lrc};
+use rustc_data_structures::sync::{self, FreezeReadGuard, FreezeWriteGuard};
+use std::sync::Arc;
 use rustc_data_structures::unord::UnordMap;
-use rustc_expand::base::SyntaxExtension;
+use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 
 #[cfg(any(unix, windows))]
 use rustc_fs_util::try_canonicalize;
@@ -27,7 +30,7 @@ use rustc_index::IndexVec;
 use rustc_middle::bug;
 use rustc_middle::ty::data_structures::IndexSet;
 use rustc_middle::ty::{TyCtxt, TyCtxtFeed};
-use rustc_proc_macro::bridge::client::ProcMacro;
+//use rustc_proc_macro::bridge::client::ProcMacro;
 use rustc_session::Session;
 use rustc_session::config::{
     CrateType, ExtendedTargetModifierInfo, ExternLocation, Externs, OptionsTargetModifiers,
@@ -37,7 +40,6 @@ use rustc_session::cstore::{CrateDepKind, CrateSource, ExternCrate, ExternCrateS
 use rustc_session::lint::{self, BuiltinLintDiag};
 use rustc_session::output::validate_crate_name;
 use rustc_session::search_paths::PathKind;
-use rustc_span::def_id::DefId;
 use rustc_span::edition::Edition;
 use rustc_span::{DUMMY_SP, Ident, Span, Symbol, sym};
 use rustc_target::spec::{PanicStrategy, Target};
@@ -522,7 +524,7 @@ impl CStore {
     /// Load WASM proc macros specified via `--wasm-proc-macro` flags
     /// Returns a vector of (macro_name, SyntaxExtension) tuples for the resolver to register
     /// This bypasses the normal metadata/CStore system entirely
-    pub fn load_wasm_proc_macros(&mut self) -> Vec<(Symbol, Lrc<SyntaxExtension>, DefId)> {
+    pub fn load_wasm_proc_macros<'tcx>(&mut self, tcx: TyCtxt<'tcx>) -> Vec<(Symbol, Arc<SyntaxExtension>, DefId)> {
         // Only compile this code when building rustc for WASM
         #[cfg(target_family = "wasm")]
         {
@@ -532,21 +534,18 @@ impl CStore {
 
             let mut result = Vec::new();
 
-            eprintln!("[CREADER] load_wasm_proc_macros called with {} entries",
-                      self.sess.opts.wasm_proc_macros.len());
-
-            for (file_name, path) in &self.sess.opts.wasm_proc_macros {
+            for (file_name, path) in &tcx.sess.opts.wasm_proc_macros {
                 eprintln!("[CREADER] Loading WASM proc macro: {} from {:?}", file_name, path);
 
                 // Read the WASM file
                 let wasm_bytes = match fs::read(path) {
                     Ok(bytes) => bytes,
                     Err(e) => {
-                        self.dcx().fatal(format!(
+                        tcx.dcx().fatal(format!(
                             "Failed to read WASM proc macro file {}: {}",
                             path.display(),
                             e
-                        ));
+                        ))
                     }
                 };
 
@@ -571,9 +570,9 @@ impl CStore {
                 );
 
                 // Allocate the CrateNum
-                let cnum = match self.tcx.create_crate_num(stable_crate_id) {
+                let cnum = match tcx.create_crate_num(stable_crate_id) {
                     Ok(feed) => {
-                        self.cstore.metas.push(None); // Reserve slot - will be filled below
+                        self.metas.push(None); // Reserve slot - will be filled below
                         feed.key()
                     }
                     Err(existing) => {
@@ -588,15 +587,15 @@ impl CStore {
                 // This is necessary because other parts of the compiler may try to query
                 // information about this crate (e.g., dependencies during lowering)
                 let stub_metadata = create_wasm_proc_macro_stub_metadata(
-                    self.sess,
-                    self.cstore,
+                    tcx.sess,
+                    self,
                     &proc_macros,
                     cnum,
                     crate_name_symbol,
                     stable_crate_id,
                     path,
                 );
-                self.cstore.set_crate_data(cnum, stub_metadata);
+                self.set_crate_data(cnum, stub_metadata);
 
                 // Convert ProcMacro to SyntaxExtension before passing to resolver
                 // This avoids needing proc_macro crate dependency in rustc_resolve
@@ -610,21 +609,21 @@ impl CStore {
                                 .collect::<Vec<_>>();
                             (
                                 trait_name,
-                                SyntaxExtensionKind::Derive(Box::new(rustc_expand::proc_macro::DeriveProcMacro { client })),
+                                SyntaxExtensionKind::Derive(Arc::new(rustc_expand::proc_macro::DeriveProcMacro { client })),
                                 helper_attrs,
                             )
                         }
                         ProcMacro::Attr { name, client } => {
                             (
                                 name,
-                                SyntaxExtensionKind::Attr(Box::new(rustc_expand::proc_macro::AttrProcMacro { client })),
+                                SyntaxExtensionKind::Attr(Arc::new(rustc_expand::proc_macro::AttrProcMacro { client })),
                                 Vec::new(),
                             )
                         }
                         ProcMacro::Bang { name, client } => {
                             (
                                 name,
-                                SyntaxExtensionKind::Bang(Box::new(rustc_expand::proc_macro::BangProcMacro { client })),
+                                SyntaxExtensionKind::Bang(Arc::new(rustc_expand::proc_macro::BangProcMacro { client })),
                                 Vec::new(),
                             )
                         }
@@ -657,7 +656,7 @@ impl CStore {
                     let name_symbol = Symbol::intern(name);
                     eprintln!("[CREADER] Symbol interned successfully");
 
-                    result.push((name_symbol, Lrc::new(ext), def_id));
+                    result.push((name_symbol, Arc::new(ext), def_id));
                 }
             }
 
@@ -668,7 +667,6 @@ impl CStore {
         {
             // When building rustc for non-WASM platforms, return empty vector
             // The flag will just be ignored
-            let _ = &self.sess.opts.wasm_proc_macros;
             Vec::new()
         }
     }
@@ -1505,7 +1503,7 @@ impl CStore {
             // Make a point span rather than covering the whole file
             let span = krate.spans.inner_span.shrink_to_lo();
 
-            tcx.sess.dcx().emit_err(errors::WasmCAbi { span });
+            tcx.dcx().emit_err(errors::WasmCAbi { span });
         }
     }
 
@@ -1643,6 +1641,7 @@ fn create_wasm_proc_macro_stub_metadata(
         dylib: Some((wasm_path.to_path_buf(), PathKind::All)),
         rlib: None,
         rmeta: None,
+        sdylib_interface: None,
     };
 
     // Create CrateMetadata with the stub data using the specialized constructor
@@ -1654,6 +1653,8 @@ fn create_wasm_proc_macro_stub_metadata(
         CrateNumMap::new(),
         CrateDepKind::MacrosOnly,
         source,
+        stable_crate_id,
+        proc_macros.len(),
     )
 }
 
@@ -1771,8 +1772,8 @@ fn create_wasm_proc_macros(
     wasm_macro: rustc_watt_runtime::WasmMacro,
 ) -> Box<[ProcMacro]> {
     eprintln!("[CREADER DEBUG] create_wasm_proc_macros called");
-    use proc_macro::bridge::client::{Client, ProcMacro};
-    use proc_macro::TokenStream;
+    use rustc_proc_macro::bridge::client::{Client, ProcMacro};
+    use rustc_proc_macro::TokenStream;
     use rustc_watt_runtime::metadata::{ProcMacroMetadata, extract_proc_macro_metadata};
     use std::sync::{Mutex, OnceLock};
 

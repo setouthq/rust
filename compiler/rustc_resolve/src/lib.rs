@@ -1689,7 +1689,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         // Load WASM proc macros specified via --wasm-proc-macro flags
         // This must happen during resolver construction, before macro expansion starts
         let wasm_proc_macros = resolver.tcx.sess.time("load_wasm_proc_macros_early", || {
-            resolver.crate_loader(|c| c.load_wasm_proc_macros())
+            resolver.cstore_mut().load_wasm_proc_macros(resolver.tcx)
         });
 
         // Register WASM proc macros in the resolver
@@ -1882,17 +1882,18 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
     /// Register WASM proc macros loaded via `--wasm-proc-macro` flags
     /// This stores them in the `wasm_proc_macros` map and creates synthetic DefIds for lookup
-    fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Lrc<SyntaxExtension>, DefId)>) {
+    fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Arc<SyntaxExtension>, DefId)>) {
         let mut crates_seen: FxHashSet<CrateNum> = FxHashSet::default();
         for (name, ext, def_id) in macros {
             eprintln!("[RESOLVER] Registering WASM proc macro: {} with DefId {:?}", name, def_id);
 
             // Create MacroData from the SyntaxExtension
-            let macro_data = MacroData::new(Lrc::clone(&ext));
+            let macro_data = MacroData::new(Arc::clone(&ext));
 
             // Store in wasm_proc_macros for name-based lookup during resolution
             self.wasm_proc_macros.insert(name, macro_data);
-            self.macro_map.insert(def_id, MacroData::new(ext));
+            let macro_data_ref = self.arenas.alloc_macro(MacroData::new(ext));
+            self.extern_macro_map.borrow_mut().insert(def_id, macro_data_ref);
 
             // Store the DefId → name mapping for reverse lookup during resolution
             self.wasm_proc_macro_def_id_to_name.insert(def_id, name);
@@ -1909,12 +1910,18 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                     // Create a binding that points to the crate root module
                     let crate_root = self.expect_module(cnum.as_def_id());
                     let vis = ty::Visibility::<DefId>::Public;
-                    let binding = (crate_root, vis, DUMMY_SP, LocalExpnId::ROOT)
-                        .to_name_binding(self.arenas);
+                    let binding = self.arenas.alloc_name_binding(NameBindingData {
+                        kind: NameBindingKind::Res(Res::Def(DefKind::Mod, crate_root.def_id())),
+                        ambiguity: None,
+                        warn_ambiguity: false,
+                        expansion: LocalExpnId::ROOT,
+                        span: DUMMY_SP,
+                        vis: ty::Visibility::Public,
+                    });
 
-                    self.extern_prelude.insert(ident, ExternPreludeEntry {
-                        binding: Some(binding),
-                        introduced_by_item: false,
+                    self.extern_prelude.insert(Macros20NormalizedIdent::new(ident), ExternPreludeEntry {
+                        item_binding: Some((binding, false)),
+                        flag_binding: None,
                     });
                 //}
             }
