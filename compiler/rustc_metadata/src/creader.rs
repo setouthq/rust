@@ -535,7 +535,7 @@ impl CStore {
             let mut result = Vec::new();
 
             for (file_name, path) in &tcx.sess.opts.wasm_proc_macros {
-                eprintln!("[CREADER] Loading WASM proc macro: {} from {:?}", file_name, path);
+                debug!("Loading WASM proc macro: {} from {:?}", file_name, path);
 
                 // Read the WASM file
                 let wasm_bytes = match fs::read(path) {
@@ -549,7 +549,7 @@ impl CStore {
                     }
                 };
 
-                eprintln!("[CREADER] Read {} bytes from {}", wasm_bytes.len(), path.display());
+                debug!("Read {} bytes from {}", wasm_bytes.len(), path.display());
 
                 // Create WasmMacro instance
                 let wasm_macro = WasmMacro::new_owned(wasm_bytes);
@@ -557,7 +557,7 @@ impl CStore {
                 // Extract proc macros from WASM
                 let proc_macros = create_wasm_proc_macros(wasm_macro);
 
-                eprintln!("[CREADER] Extracted {} proc macros from WASM file", proc_macros.len());
+                debug!("Extracted {} proc macros from WASM file", proc_macros.len());
 
                 // Allocate a CrateNum for this WASM proc macro library
                 // Use a synthetic stable crate ID based on the file name
@@ -581,7 +581,7 @@ impl CStore {
                     }
                 };
 
-                eprintln!("[CREADER] Allocated CrateNum {:?} for WASM proc macro library", cnum);
+                debug!("Allocated CrateNum {:?} for WASM proc macro library", cnum);
 
                 // Create stub CrateMetadata for this WASM proc macro crate
                 // This is necessary because other parts of the compiler may try to query
@@ -652,9 +652,9 @@ impl CStore {
                         index: rustc_span::def_id::DefIndex::from_u32((idx + 1) as u32),
                     };
 
-                    eprintln!("[CREADER] About to intern symbol for WASM proc macro: {}", name);
+                    debug!("About to intern symbol for WASM proc macro: {}", name);
                     let name_symbol = Symbol::intern(name);
-                    eprintln!("[CREADER] Symbol interned successfully");
+                    debug!("Symbol interned successfully");
 
                     result.push((name_symbol, Arc::new(ext), def_id));
                 }
@@ -828,7 +828,7 @@ impl CStore {
 
         let raw_proc_macros = if let Some(pre_loaded) = pre_loaded_proc_macros {
             // Use pre-loaded proc macros (e.g., from WASM)
-            eprintln!("[CREADER] Using {} pre-loaded proc macros", pre_loaded.len());
+            debug!("Using {} pre-loaded proc macros", pre_loaded.len());
             Some(pre_loaded)
         } else if crate_root.is_proc_macro_crate() {
             // Load proc macros from dylib using dlsym
@@ -1170,7 +1170,7 @@ impl CStore {
         path: &Path,
         _stable_crate_id: StableCrateId,
     ) -> Result<&'static [ProcMacro], CrateError> {
-        eprintln!("[CREADER DEBUG] dlsym_proc_macros_wasm called for: {:?}", path);
+        trace!("dlsym_proc_macros_wasm called for: {:?}", path);
         use rustc_watt_runtime::WasmMacro;
         use std::fs;
 
@@ -1767,11 +1767,54 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
 ///
 /// This function extracts proc macro metadata from the WASM module and creates
 /// the appropriate ProcMacro enum variants that bridge to the watt runtime.
+// =============================================================================
+// WASM PROC-MACRO ARCHITECTURE
+// =============================================================================
+//
+// This module implements support for running procedural macros compiled to WASM
+// (WebAssembly) instead of native dylibs. This is essential for running rustc
+// itself as a WASM module (e.g., in wargo).
+//
+// ## How Native Proc-Macros Work
+//
+// Native proc-macros are compiled to dylibs with embedded .rmeta metadata.
+// rustc loads them via dlopen/dlsym, reading their metadata and calling their
+// exported functions directly.
+//
+// ## How WASM Proc-Macros Work
+//
+// WASM proc-macros are .wasm files interpreted by the `rustc_watt_runtime` crate.
+// Since we cannot dlopen a WASM file, we:
+//
+// 1. **Create synthetic metadata stubs**: Instead of reading .rmeta from the
+//    WASM file, we construct minimal `CrateRoot` and `CrateMetadata` structs
+//    with empty tables. The decoder has fallback logic for proc-macro crates
+//    with empty tables (returns defaults like DUMMY_SP, Visibility::Public).
+//
+// 2. **Pre-load proc-macros**: The actual `ProcMacro` instances are created
+//    from the WASM module and stored in `CrateMetadata.raw_proc_macros`.
+//    This bypasses the normal dlsym-based loading entirely.
+//
+// 3. **Use slot functions for dispatch**: The proc_macro bridge requires
+//    `fn` pointers (not closures) because of `Copy + ZST` constraints.
+//    We use const-generic functions (`slot_derive::<N>`) that look up the
+//    actual WASM macro from a global slot registry at runtime.
+//
+// ## Key Components
+//
+// - `create_wasm_proc_macros()`: Creates `ProcMacro` instances from WASM
+// - `create_wasm_proc_macro_stub_metadata()`: Creates synthetic CrateMetadata
+// - `CrateRoot::new_wasm_proc_macro_stub()`: Creates minimal CrateRoot
+// - `slot_derive/attr/bang::<N>()`: Const-generic dispatch functions
+// - `make_derive/attr/bang_client()`: Maps slot indices to Client instances
+//
+// =============================================================================
+
 #[cfg(target_family = "wasm")]
 fn create_wasm_proc_macros(
     wasm_macro: rustc_watt_runtime::WasmMacro,
 ) -> Box<[ProcMacro]> {
-    eprintln!("[CREADER DEBUG] create_wasm_proc_macros called");
+    trace!("create_wasm_proc_macros called");
     use rustc_proc_macro::bridge::client::{Client, ProcMacro};
     use rustc_proc_macro::TokenStream;
     use rustc_watt_runtime::metadata::{ProcMacroMetadata, extract_proc_macro_metadata};
@@ -1810,1192 +1853,77 @@ fn create_wasm_proc_macros(
         panic!("Ran out of proc macro slots (max 256)");
     }
 
-    fn slot_0_derive(input: TokenStream) -> TokenStream {
-        eprintln!("[WASM SLOT] slot_0_derive called!");
+    // ==================== MACRO-GENERATED SLOT FUNCTIONS ====================
+    // 
+    // These slot functions bridge between rustc's proc-macro infrastructure
+    // (which requires static function pointers) and the watt runtime (which
+    // needs dynamic dispatch to WASM modules).
+    //
+    // The Client::expand1/expand2 functions require `Fn(...) + Copy` closures,
+    // which effectively means zero-sized types. Closures that capture data
+    // (like a slot index) are not ZST, so we use const generics instead:
+    // each `slot_derive::<N>` is a distinct ZST function item.
+    
+    fn slot_derive<const N: usize>(input: TokenStream) -> TokenStream {
         let slots = get_slots().lock().unwrap();
-        let data = slots[0].as_ref().expect("Slot 0 not initialized");
-        eprintln!("[WASM SLOT] About to call proc_macro_derive for function: {}", data.function_name);
-        let result = data.wasm_macro.proc_macro_derive(data.function_name, input);
-        eprintln!("[WASM SLOT] proc_macro_derive returned successfully");
-        result
-    }
-    fn slot_0_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[0].as_ref().expect("Slot 0 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_0_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[0].as_ref().expect("Slot 0 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_1_derive(input: TokenStream) -> TokenStream {
-        eprintln!("[WASM SLOT] slot_1_derive called!");
-        let slots = get_slots().lock().unwrap();
-        let data = slots[1].as_ref().expect("Slot 1 not initialized");
-        eprintln!("[WASM SLOT] About to call proc_macro_derive for {}", data.function_name);
-        let result = data.wasm_macro.proc_macro_derive(data.function_name, input);
-        eprintln!("[WASM SLOT] proc_macro_derive returned successfully");
-        result
-    }
-    fn slot_1_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[1].as_ref().expect("Slot 1 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_1_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[1].as_ref().expect("Slot 1 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_2_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[2].as_ref().expect("Slot 2 not initialized");
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
         data.wasm_macro.proc_macro_derive(data.function_name, input)
     }
-    fn slot_2_attr(args: TokenStream, input: TokenStream) -> TokenStream {
+
+    fn slot_attr<const N: usize>(args: TokenStream, input: TokenStream) -> TokenStream {
         let slots = get_slots().lock().unwrap();
-        let data = slots[2].as_ref().expect("Slot 2 not initialized");
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
         data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
     }
-    fn slot_2_bang(input: TokenStream) -> TokenStream {
+
+    fn slot_bang<const N: usize>(input: TokenStream) -> TokenStream {
         let slots = get_slots().lock().unwrap();
-        let data = slots[2].as_ref().expect("Slot 2 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_3_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[3].as_ref().expect("Slot 3 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_3_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[3].as_ref().expect("Slot 3 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_3_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[3].as_ref().expect("Slot 3 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_4_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[4].as_ref().expect("Slot 4 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_4_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[4].as_ref().expect("Slot 4 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_4_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[4].as_ref().expect("Slot 4 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_5_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[5].as_ref().expect("Slot 5 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_5_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[5].as_ref().expect("Slot 5 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_5_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[5].as_ref().expect("Slot 5 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_6_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[6].as_ref().expect("Slot 6 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_6_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[6].as_ref().expect("Slot 6 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_6_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[6].as_ref().expect("Slot 6 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_7_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[7].as_ref().expect("Slot 7 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_7_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[7].as_ref().expect("Slot 7 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_7_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[7].as_ref().expect("Slot 7 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_8_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[8].as_ref().expect("Slot 8 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_8_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[8].as_ref().expect("Slot 8 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_8_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[8].as_ref().expect("Slot 8 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_9_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[9].as_ref().expect("Slot 9 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_9_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[9].as_ref().expect("Slot 9 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_9_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[9].as_ref().expect("Slot 9 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_10_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[10].as_ref().expect("Slot 10 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_10_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[10].as_ref().expect("Slot 10 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_10_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[10].as_ref().expect("Slot 10 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_11_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[11].as_ref().expect("Slot 11 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_11_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[11].as_ref().expect("Slot 11 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_11_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[11].as_ref().expect("Slot 11 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_12_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[12].as_ref().expect("Slot 12 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_12_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[12].as_ref().expect("Slot 12 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_12_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[12].as_ref().expect("Slot 12 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_13_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[13].as_ref().expect("Slot 13 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_13_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[13].as_ref().expect("Slot 13 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_13_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[13].as_ref().expect("Slot 13 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_14_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[14].as_ref().expect("Slot 14 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_14_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[14].as_ref().expect("Slot 14 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_14_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[14].as_ref().expect("Slot 14 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_15_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[15].as_ref().expect("Slot 15 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_15_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[15].as_ref().expect("Slot 15 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_15_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[15].as_ref().expect("Slot 15 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_16_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[16].as_ref().expect("Slot 16 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_16_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[16].as_ref().expect("Slot 16 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_16_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[16].as_ref().expect("Slot 16 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_17_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[17].as_ref().expect("Slot 17 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_17_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[17].as_ref().expect("Slot 17 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_17_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[17].as_ref().expect("Slot 17 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_18_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[18].as_ref().expect("Slot 18 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_18_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[18].as_ref().expect("Slot 18 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_18_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[18].as_ref().expect("Slot 18 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_19_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[19].as_ref().expect("Slot 19 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_19_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[19].as_ref().expect("Slot 19 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_19_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[19].as_ref().expect("Slot 19 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_20_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[20].as_ref().expect("Slot 20 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_20_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[20].as_ref().expect("Slot 20 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_20_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[20].as_ref().expect("Slot 20 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_21_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[21].as_ref().expect("Slot 21 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_21_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[21].as_ref().expect("Slot 21 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_21_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[21].as_ref().expect("Slot 21 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_22_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[22].as_ref().expect("Slot 22 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_22_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[22].as_ref().expect("Slot 22 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_22_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[22].as_ref().expect("Slot 22 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_23_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[23].as_ref().expect("Slot 23 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_23_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[23].as_ref().expect("Slot 23 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_23_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[23].as_ref().expect("Slot 23 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_24_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[24].as_ref().expect("Slot 24 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_24_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[24].as_ref().expect("Slot 24 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_24_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[24].as_ref().expect("Slot 24 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_25_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[25].as_ref().expect("Slot 25 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_25_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[25].as_ref().expect("Slot 25 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_25_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[25].as_ref().expect("Slot 25 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_26_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[26].as_ref().expect("Slot 26 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_26_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[26].as_ref().expect("Slot 26 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_26_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[26].as_ref().expect("Slot 26 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_27_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[27].as_ref().expect("Slot 27 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_27_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[27].as_ref().expect("Slot 27 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_27_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[27].as_ref().expect("Slot 27 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_28_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[28].as_ref().expect("Slot 28 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_28_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[28].as_ref().expect("Slot 28 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_28_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[28].as_ref().expect("Slot 28 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_29_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[29].as_ref().expect("Slot 29 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_29_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[29].as_ref().expect("Slot 29 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_29_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[29].as_ref().expect("Slot 29 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_30_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[30].as_ref().expect("Slot 30 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_30_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[30].as_ref().expect("Slot 30 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_30_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[30].as_ref().expect("Slot 30 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_31_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[31].as_ref().expect("Slot 31 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_31_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[31].as_ref().expect("Slot 31 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_31_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[31].as_ref().expect("Slot 31 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_32_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[32].as_ref().expect("Slot 32 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_32_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[32].as_ref().expect("Slot 32 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_32_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[32].as_ref().expect("Slot 32 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_33_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[33].as_ref().expect("Slot 33 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_33_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[33].as_ref().expect("Slot 33 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_33_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[33].as_ref().expect("Slot 33 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_34_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[34].as_ref().expect("Slot 34 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_34_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[34].as_ref().expect("Slot 34 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_34_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[34].as_ref().expect("Slot 34 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_35_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[35].as_ref().expect("Slot 35 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_35_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[35].as_ref().expect("Slot 35 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_35_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[35].as_ref().expect("Slot 35 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_36_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[36].as_ref().expect("Slot 36 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_36_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[36].as_ref().expect("Slot 36 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_36_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[36].as_ref().expect("Slot 36 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_37_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[37].as_ref().expect("Slot 37 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_37_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[37].as_ref().expect("Slot 37 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_37_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[37].as_ref().expect("Slot 37 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_38_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[38].as_ref().expect("Slot 38 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_38_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[38].as_ref().expect("Slot 38 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_38_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[38].as_ref().expect("Slot 38 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_39_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[39].as_ref().expect("Slot 39 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_39_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[39].as_ref().expect("Slot 39 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_39_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[39].as_ref().expect("Slot 39 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_40_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[40].as_ref().expect("Slot 40 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_40_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[40].as_ref().expect("Slot 40 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_40_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[40].as_ref().expect("Slot 40 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_41_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[41].as_ref().expect("Slot 41 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_41_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[41].as_ref().expect("Slot 41 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_41_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[41].as_ref().expect("Slot 41 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_42_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[42].as_ref().expect("Slot 42 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_42_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[42].as_ref().expect("Slot 42 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_42_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[42].as_ref().expect("Slot 42 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_43_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[43].as_ref().expect("Slot 43 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_43_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[43].as_ref().expect("Slot 43 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_43_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[43].as_ref().expect("Slot 43 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_44_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[44].as_ref().expect("Slot 44 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_44_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[44].as_ref().expect("Slot 44 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_44_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[44].as_ref().expect("Slot 44 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_45_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[45].as_ref().expect("Slot 45 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_45_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[45].as_ref().expect("Slot 45 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_45_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[45].as_ref().expect("Slot 45 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_46_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[46].as_ref().expect("Slot 46 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_46_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[46].as_ref().expect("Slot 46 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_46_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[46].as_ref().expect("Slot 46 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_47_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[47].as_ref().expect("Slot 47 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_47_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[47].as_ref().expect("Slot 47 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_47_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[47].as_ref().expect("Slot 47 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_48_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[48].as_ref().expect("Slot 48 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_48_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[48].as_ref().expect("Slot 48 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_48_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[48].as_ref().expect("Slot 48 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_49_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[49].as_ref().expect("Slot 49 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_49_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[49].as_ref().expect("Slot 49 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_49_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[49].as_ref().expect("Slot 49 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_50_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[50].as_ref().expect("Slot 50 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_50_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[50].as_ref().expect("Slot 50 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_50_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[50].as_ref().expect("Slot 50 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_51_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[51].as_ref().expect("Slot 51 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_51_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[51].as_ref().expect("Slot 51 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_51_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[51].as_ref().expect("Slot 51 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_52_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[52].as_ref().expect("Slot 52 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_52_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[52].as_ref().expect("Slot 52 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_52_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[52].as_ref().expect("Slot 52 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_53_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[53].as_ref().expect("Slot 53 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_53_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[53].as_ref().expect("Slot 53 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_53_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[53].as_ref().expect("Slot 53 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_54_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[54].as_ref().expect("Slot 54 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_54_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[54].as_ref().expect("Slot 54 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_54_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[54].as_ref().expect("Slot 54 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_55_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[55].as_ref().expect("Slot 55 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_55_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[55].as_ref().expect("Slot 55 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_55_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[55].as_ref().expect("Slot 55 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_56_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[56].as_ref().expect("Slot 56 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_56_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[56].as_ref().expect("Slot 56 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_56_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[56].as_ref().expect("Slot 56 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_57_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[57].as_ref().expect("Slot 57 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_57_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[57].as_ref().expect("Slot 57 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_57_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[57].as_ref().expect("Slot 57 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_58_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[58].as_ref().expect("Slot 58 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_58_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[58].as_ref().expect("Slot 58 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_58_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[58].as_ref().expect("Slot 58 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_59_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[59].as_ref().expect("Slot 59 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_59_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[59].as_ref().expect("Slot 59 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_59_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[59].as_ref().expect("Slot 59 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_60_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[60].as_ref().expect("Slot 60 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_60_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[60].as_ref().expect("Slot 60 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_60_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[60].as_ref().expect("Slot 60 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_61_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[61].as_ref().expect("Slot 61 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_61_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[61].as_ref().expect("Slot 61 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_61_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[61].as_ref().expect("Slot 61 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_62_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[62].as_ref().expect("Slot 62 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_62_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[62].as_ref().expect("Slot 62 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_62_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[62].as_ref().expect("Slot 62 not initialized");
-        data.wasm_macro.proc_macro(data.function_name, input)
-    }
-    fn slot_63_derive(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[63].as_ref().expect("Slot 63 not initialized");
-        data.wasm_macro.proc_macro_derive(data.function_name, input)
-    }
-    fn slot_63_attr(args: TokenStream, input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[63].as_ref().expect("Slot 63 not initialized");
-        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
-    }
-    fn slot_63_bang(input: TokenStream) -> TokenStream {
-        let slots = get_slots().lock().unwrap();
-        let data = slots[63].as_ref().expect("Slot 63 not initialized");
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
         data.wasm_macro.proc_macro(data.function_name, input)
     }
 
-    fn make_derive_client(slot: usize) -> Client<TokenStream, TokenStream> {
-        match slot {
-            0 => Client::expand1(slot_0_derive),
-            1 => Client::expand1(slot_1_derive),
-            2 => Client::expand1(slot_2_derive),
-            3 => Client::expand1(slot_3_derive),
-            4 => Client::expand1(slot_4_derive),
-            5 => Client::expand1(slot_5_derive),
-            6 => Client::expand1(slot_6_derive),
-            7 => Client::expand1(slot_7_derive),
-            8 => Client::expand1(slot_8_derive),
-            9 => Client::expand1(slot_9_derive),
-            10 => Client::expand1(slot_10_derive),
-            11 => Client::expand1(slot_11_derive),
-            12 => Client::expand1(slot_12_derive),
-            13 => Client::expand1(slot_13_derive),
-            14 => Client::expand1(slot_14_derive),
-            15 => Client::expand1(slot_15_derive),
-            16 => Client::expand1(slot_16_derive),
-            17 => Client::expand1(slot_17_derive),
-            18 => Client::expand1(slot_18_derive),
-            19 => Client::expand1(slot_19_derive),
-            20 => Client::expand1(slot_20_derive),
-            21 => Client::expand1(slot_21_derive),
-            22 => Client::expand1(slot_22_derive),
-            23 => Client::expand1(slot_23_derive),
-            24 => Client::expand1(slot_24_derive),
-            25 => Client::expand1(slot_25_derive),
-            26 => Client::expand1(slot_26_derive),
-            27 => Client::expand1(slot_27_derive),
-            28 => Client::expand1(slot_28_derive),
-            29 => Client::expand1(slot_29_derive),
-            30 => Client::expand1(slot_30_derive),
-            31 => Client::expand1(slot_31_derive),
-            32 => Client::expand1(slot_32_derive),
-            33 => Client::expand1(slot_33_derive),
-            34 => Client::expand1(slot_34_derive),
-            35 => Client::expand1(slot_35_derive),
-            36 => Client::expand1(slot_36_derive),
-            37 => Client::expand1(slot_37_derive),
-            38 => Client::expand1(slot_38_derive),
-            39 => Client::expand1(slot_39_derive),
-            40 => Client::expand1(slot_40_derive),
-            41 => Client::expand1(slot_41_derive),
-            42 => Client::expand1(slot_42_derive),
-            43 => Client::expand1(slot_43_derive),
-            44 => Client::expand1(slot_44_derive),
-            45 => Client::expand1(slot_45_derive),
-            46 => Client::expand1(slot_46_derive),
-            47 => Client::expand1(slot_47_derive),
-            48 => Client::expand1(slot_48_derive),
-            49 => Client::expand1(slot_49_derive),
-            50 => Client::expand1(slot_50_derive),
-            51 => Client::expand1(slot_51_derive),
-            52 => Client::expand1(slot_52_derive),
-            53 => Client::expand1(slot_53_derive),
-            54 => Client::expand1(slot_54_derive),
-            55 => Client::expand1(slot_55_derive),
-            56 => Client::expand1(slot_56_derive),
-            57 => Client::expand1(slot_57_derive),
-            58 => Client::expand1(slot_58_derive),
-            59 => Client::expand1(slot_59_derive),
-            60 => Client::expand1(slot_60_derive),
-            61 => Client::expand1(slot_61_derive),
-            62 => Client::expand1(slot_62_derive),
-            63 => Client::expand1(slot_63_derive),
-            _ => panic!("Invalid slot: {}", slot),
-        }
+    macro_rules! make_slot_clients {
+        ($($n:literal),* $(,)?) => {
+            fn make_derive_client(slot: usize) -> Client<TokenStream, TokenStream> {
+                match slot {
+                    $($n => Client::expand1(slot_derive::<$n>),)*
+                    _ => panic!("Invalid derive slot: {} (max 63)", slot),
+                }
+            }
+
+            fn make_attr_client(slot: usize) -> Client<(TokenStream, TokenStream), TokenStream> {
+                match slot {
+                    $($n => Client::expand2(slot_attr::<$n>),)*
+                    _ => panic!("Invalid attr slot: {} (max 63)", slot),
+                }
+            }
+
+            fn make_bang_client(slot: usize) -> Client<TokenStream, TokenStream> {
+                match slot {
+                    $($n => Client::expand1(slot_bang::<$n>),)*
+                    _ => panic!("Invalid bang slot: {} (max 63)", slot),
+                }
+            }
+        };
     }
 
-    fn make_attr_client(slot: usize) -> Client<(TokenStream, TokenStream), TokenStream> {
-        match slot {
-            0 => Client::expand2(slot_0_attr),
-            1 => Client::expand2(slot_1_attr),
-            2 => Client::expand2(slot_2_attr),
-            3 => Client::expand2(slot_3_attr),
-            4 => Client::expand2(slot_4_attr),
-            5 => Client::expand2(slot_5_attr),
-            6 => Client::expand2(slot_6_attr),
-            7 => Client::expand2(slot_7_attr),
-            8 => Client::expand2(slot_8_attr),
-            9 => Client::expand2(slot_9_attr),
-            10 => Client::expand2(slot_10_attr),
-            11 => Client::expand2(slot_11_attr),
-            12 => Client::expand2(slot_12_attr),
-            13 => Client::expand2(slot_13_attr),
-            14 => Client::expand2(slot_14_attr),
-            15 => Client::expand2(slot_15_attr),
-            16 => Client::expand2(slot_16_attr),
-            17 => Client::expand2(slot_17_attr),
-            18 => Client::expand2(slot_18_attr),
-            19 => Client::expand2(slot_19_attr),
-            20 => Client::expand2(slot_20_attr),
-            21 => Client::expand2(slot_21_attr),
-            22 => Client::expand2(slot_22_attr),
-            23 => Client::expand2(slot_23_attr),
-            24 => Client::expand2(slot_24_attr),
-            25 => Client::expand2(slot_25_attr),
-            26 => Client::expand2(slot_26_attr),
-            27 => Client::expand2(slot_27_attr),
-            28 => Client::expand2(slot_28_attr),
-            29 => Client::expand2(slot_29_attr),
-            30 => Client::expand2(slot_30_attr),
-            31 => Client::expand2(slot_31_attr),
-            32 => Client::expand2(slot_32_attr),
-            33 => Client::expand2(slot_33_attr),
-            34 => Client::expand2(slot_34_attr),
-            35 => Client::expand2(slot_35_attr),
-            36 => Client::expand2(slot_36_attr),
-            37 => Client::expand2(slot_37_attr),
-            38 => Client::expand2(slot_38_attr),
-            39 => Client::expand2(slot_39_attr),
-            40 => Client::expand2(slot_40_attr),
-            41 => Client::expand2(slot_41_attr),
-            42 => Client::expand2(slot_42_attr),
-            43 => Client::expand2(slot_43_attr),
-            44 => Client::expand2(slot_44_attr),
-            45 => Client::expand2(slot_45_attr),
-            46 => Client::expand2(slot_46_attr),
-            47 => Client::expand2(slot_47_attr),
-            48 => Client::expand2(slot_48_attr),
-            49 => Client::expand2(slot_49_attr),
-            50 => Client::expand2(slot_50_attr),
-            51 => Client::expand2(slot_51_attr),
-            52 => Client::expand2(slot_52_attr),
-            53 => Client::expand2(slot_53_attr),
-            54 => Client::expand2(slot_54_attr),
-            55 => Client::expand2(slot_55_attr),
-            56 => Client::expand2(slot_56_attr),
-            57 => Client::expand2(slot_57_attr),
-            58 => Client::expand2(slot_58_attr),
-            59 => Client::expand2(slot_59_attr),
-            60 => Client::expand2(slot_60_attr),
-            61 => Client::expand2(slot_61_attr),
-            62 => Client::expand2(slot_62_attr),
-            63 => Client::expand2(slot_63_attr),
-            _ => panic!("Invalid slot: {}", slot),
-        }
-    }
-
-    fn make_bang_client(slot: usize) -> Client<TokenStream, TokenStream> {
-        match slot {
-            0 => Client::expand1(slot_0_bang),
-            1 => Client::expand1(slot_1_bang),
-            2 => Client::expand1(slot_2_bang),
-            3 => Client::expand1(slot_3_bang),
-            4 => Client::expand1(slot_4_bang),
-            5 => Client::expand1(slot_5_bang),
-            6 => Client::expand1(slot_6_bang),
-            7 => Client::expand1(slot_7_bang),
-            8 => Client::expand1(slot_8_bang),
-            9 => Client::expand1(slot_9_bang),
-            10 => Client::expand1(slot_10_bang),
-            11 => Client::expand1(slot_11_bang),
-            12 => Client::expand1(slot_12_bang),
-            13 => Client::expand1(slot_13_bang),
-            14 => Client::expand1(slot_14_bang),
-            15 => Client::expand1(slot_15_bang),
-            16 => Client::expand1(slot_16_bang),
-            17 => Client::expand1(slot_17_bang),
-            18 => Client::expand1(slot_18_bang),
-            19 => Client::expand1(slot_19_bang),
-            20 => Client::expand1(slot_20_bang),
-            21 => Client::expand1(slot_21_bang),
-            22 => Client::expand1(slot_22_bang),
-            23 => Client::expand1(slot_23_bang),
-            24 => Client::expand1(slot_24_bang),
-            25 => Client::expand1(slot_25_bang),
-            26 => Client::expand1(slot_26_bang),
-            27 => Client::expand1(slot_27_bang),
-            28 => Client::expand1(slot_28_bang),
-            29 => Client::expand1(slot_29_bang),
-            30 => Client::expand1(slot_30_bang),
-            31 => Client::expand1(slot_31_bang),
-            32 => Client::expand1(slot_32_bang),
-            33 => Client::expand1(slot_33_bang),
-            34 => Client::expand1(slot_34_bang),
-            35 => Client::expand1(slot_35_bang),
-            36 => Client::expand1(slot_36_bang),
-            37 => Client::expand1(slot_37_bang),
-            38 => Client::expand1(slot_38_bang),
-            39 => Client::expand1(slot_39_bang),
-            40 => Client::expand1(slot_40_bang),
-            41 => Client::expand1(slot_41_bang),
-            42 => Client::expand1(slot_42_bang),
-            43 => Client::expand1(slot_43_bang),
-            44 => Client::expand1(slot_44_bang),
-            45 => Client::expand1(slot_45_bang),
-            46 => Client::expand1(slot_46_bang),
-            47 => Client::expand1(slot_47_bang),
-            48 => Client::expand1(slot_48_bang),
-            49 => Client::expand1(slot_49_bang),
-            50 => Client::expand1(slot_50_bang),
-            51 => Client::expand1(slot_51_bang),
-            52 => Client::expand1(slot_52_bang),
-            53 => Client::expand1(slot_53_bang),
-            54 => Client::expand1(slot_54_bang),
-            55 => Client::expand1(slot_55_bang),
-            56 => Client::expand1(slot_56_bang),
-            57 => Client::expand1(slot_57_bang),
-            58 => Client::expand1(slot_58_bang),
-            59 => Client::expand1(slot_59_bang),
-            60 => Client::expand1(slot_60_bang),
-            61 => Client::expand1(slot_61_bang),
-            62 => Client::expand1(slot_62_bang),
-            63 => Client::expand1(slot_63_bang),
-            _ => panic!("Invalid slot: {}", slot),
-        }
-    }
-
+    make_slot_clients!(
+         0,  1,  2,  3,  4,  5,  6,  7,  8,  9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+        50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+        60, 61, 62, 63,
+    );
+    // ==================== END MACRO-GENERATED SLOT FUNCTIONS ====================
     // Extract metadata from the WASM module's custom section
-    eprintln!("[CREADER DEBUG] Extracting proc macro metadata from WASM...");
+    trace!("Extracting proc macro metadata from WASM...");
     let metadata = extract_proc_macro_metadata(wasm_macro.wasm_bytes());
-    eprintln!("[CREADER DEBUG] Found {} metadata entries", metadata.len());
+    trace!("Found {} metadata entries", metadata.len());
 
     if metadata.is_empty() {
-        eprintln!("[CREADER DEBUG] No proc macro metadata found - returning empty");
+        trace!("No proc macro metadata found - returning empty");
         debug!(
             "No proc macro metadata found in WASM module. \
              Make sure the proc macro crate includes the .rustc_proc_macro_decls custom section."
