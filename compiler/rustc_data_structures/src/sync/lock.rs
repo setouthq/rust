@@ -92,7 +92,14 @@ pub struct Lock<T> {
 impl<T> Lock<T> {
     #[inline(always)]
     pub fn new(inner: T) -> Self {
-        let (mode, mode_union) = if unlikely(mode::might_be_dyn_thread_safe()) {
+        // On WASM, parking_lot doesn't work properly even with threads,
+        // so always use NoSync mode. The compiler itself doesn't use threads on WASM.
+        #[cfg(target_family = "wasm")]
+        let use_sync = false;
+        #[cfg(not(target_family = "wasm"))]
+        let use_sync = unlikely(mode::might_be_dyn_thread_safe());
+
+        let (mode, mode_union) = if use_sync {
             // Create the lock with synchronization enabled using the `RawMutex` type.
             (Mode::Sync, ModeUnion { sync: ManuallyDrop::new(RawMutex::INIT) })
         } else {
@@ -100,6 +107,19 @@ impl<T> Lock<T> {
             (Mode::NoSync, ModeUnion { no_sync: ManuallyDrop::new(Cell::new(!LOCKED)) })
         };
         Lock { mode, mode_union, data: UnsafeCell::new(inner) }
+    }
+
+    /// Create a lock with synchronization explicitly disabled.
+    /// This is useful for contexts where concurrent access is known to not occur,
+    /// such as WASM proc macro stub metadata where parking_lot's synchronization
+    /// primitives may not be available.
+    #[inline(always)]
+    pub fn new_no_sync(inner: T) -> Self {
+        Lock {
+            mode: Mode::NoSync,
+            mode_union: ModeUnion { no_sync: ManuallyDrop::new(Cell::new(!LOCKED)) },
+            data: UnsafeCell::new(inner),
+        }
     }
 
     #[inline(always)]

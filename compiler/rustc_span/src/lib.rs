@@ -25,6 +25,7 @@
 #![feature(core_io_borrowed_buf)]
 #![feature(if_let_guard)]
 #![feature(map_try_insert)]
+#![feature(mapped_lock_guards)]
 #![feature(negative_impls)]
 #![feature(read_buf)]
 #![feature(rustc_attrs)]

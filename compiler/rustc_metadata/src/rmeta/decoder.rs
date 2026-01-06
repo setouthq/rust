@@ -63,6 +63,13 @@ impl MetadataBlob {
         if MemDecoder::new(&slice, 0).is_ok() { Ok(Self(slice)) } else { Err(()) }
     }
 
+     /// Creates a MetadataBlob without validation.
+    /// This is used for WASM proc macro stubs where we won't actually decode from the blob.
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn new_unvalidated(slice: OwnedSlice) -> Self {
+        Self(slice)
+    }
+
     /// Since this has passed the validation of [`MetadataBlob::new`], this returns bytes which are
     /// known to pass the [`MemDecoder`] validation.
     pub(crate) fn bytes(&self) -> &OwnedSlice {
@@ -955,6 +962,178 @@ impl MetadataBlob {
 }
 
 impl CrateRoot {
+       /// Create a minimal CrateRoot stub for WASM proc-macro crates.
+    ///
+    /// WASM proc-macros do not have real .rmeta files, so we construct a minimal
+    /// CrateRoot with empty tables. The decoder has fallback logic for proc-macro
+    /// crates with empty tables (e.g., returning DUMMY_SP for spans, Public for
+    /// visibility). The actual proc-macro data comes from `raw_proc_macros`.
+    
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn new_wasm_proc_macro_stub(
+        triple: rustc_target::spec::TargetTuple,
+        name: Symbol,
+        stable_crate_id: StableCrateId,
+    ) -> Self {
+        use rustc_data_structures::fingerprint::Fingerprint;
+        use rustc_data_structures::svh::Svh;
+        use rustc_session::config::SymbolManglingVersion;
+        use rustc_span::edition::Edition;
+        use rustc_target::spec::PanicStrategy;
+        use std::num::NonZero;
+
+
+        // Helper macro for creating empty LazyTables (for WASM proc-macro stubs)
+        macro_rules! empty_table {
+            () => { LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0) };
+        }
+
+        CrateRoot {
+            header: CrateHeader {
+                triple,
+                hash: Svh::new(Fingerprint::ZERO),
+                name,
+                is_proc_macro_crate: true,
+                is_stub: false
+            },
+            extra_filename: String::new(),
+            stable_crate_id,
+            required_panic_strategy: None,
+            panic_in_drop_strategy: PanicStrategy::Unwind,
+            edition: Edition::Edition2015,
+            has_global_allocator: false,
+            has_alloc_error_handler: false,
+            has_panic_handler: false,
+            has_default_lib_allocator: false,
+
+            crate_deps: LazyArray::default(),
+            dylib_dependency_formats: LazyArray::default(),
+            lib_features: LazyArray::default(),
+            stability_implications: LazyArray::default(),
+            lang_items: LazyArray::default(),
+            lang_items_missing: LazyArray::default(),
+            stripped_cfg_items: LazyArray::default(),
+            diagnostic_items: LazyArray::default(),
+            native_libraries: LazyArray::default(),
+            foreign_modules: LazyArray::default(),
+            traits: LazyArray::default(),
+            impls: LazyArray::default(),
+            incoherent_impls: LazyArray::default(),
+            interpret_alloc_index: LazyArray::default(),
+            proc_macro_data: Some(ProcMacroData {
+                proc_macro_decls_static: rustc_span::def_id::DefIndex::from_u32(0),
+                stability: None,
+                macros: LazyArray::default(),
+            }),
+
+            tables: LazyTables {
+                intrinsic: empty_table!(),
+                is_macro_rules: empty_table!(),
+                type_alias_is_lazy: empty_table!(),
+                attr_flags: empty_table!(),
+                def_path_hashes: empty_table!(),
+                explicit_item_bounds: empty_table!(),
+                inferred_outlives_of: empty_table!(),
+                explicit_super_predicates_of: empty_table!(),
+                explicit_implied_predicates_of: empty_table!(),
+                explicit_implied_const_bounds: empty_table!(),
+                inherent_impls: empty_table!(),
+                associated_types_for_impl_traits_in_trait_or_impl: empty_table!(),
+                opt_rpitit_info: empty_table!(),
+                explicit_item_self_bounds: empty_table!(),
+                module_children_reexports: empty_table!(),
+                cross_crate_inlinable: empty_table!(),
+                attributes: empty_table!(),
+                module_children_non_reexports: empty_table!(),
+                associated_item_or_field_def_ids: empty_table!(),
+                def_kind: empty_table!(),
+                visibility: empty_table!(),
+                def_span: empty_table!(),
+                def_ident_span: empty_table!(),
+                lookup_stability: empty_table!(),
+                lookup_const_stability: empty_table!(),
+                lookup_default_body_stability: empty_table!(),
+                lookup_deprecation_entry: empty_table!(),
+                explicit_predicates_of: empty_table!(),
+                generics_of: empty_table!(),
+                type_of: empty_table!(),
+                variances_of: empty_table!(),
+                fn_sig: empty_table!(),
+                codegen_fn_attrs: empty_table!(),
+                impl_trait_header: empty_table!(),
+                const_param_default: empty_table!(),
+                object_lifetime_default: empty_table!(),
+                optimized_mir: empty_table!(),
+                mir_for_ctfe: empty_table!(),
+                closure_saved_names_of_captured_variables: empty_table!(),
+                mir_coroutine_witnesses: empty_table!(),
+                promoted_mir: empty_table!(),
+                thir_abstract_const: empty_table!(),
+                impl_parent: empty_table!(),
+                constness: empty_table!(),
+                const_conditions: empty_table!(),
+                defaultness: empty_table!(),
+                coerce_unsized_info: empty_table!(),
+                mir_const_qualif: empty_table!(),
+                rendered_const: empty_table!(),
+                rendered_precise_capturing_args: empty_table!(),
+                asyncness: empty_table!(),
+                fn_arg_idents: empty_table!(),
+                coroutine_kind: empty_table!(),
+                coroutine_for_closure: empty_table!(),
+                coroutine_by_move_body_def_id: empty_table!(),
+                eval_static_initializer: empty_table!(),
+                trait_def: empty_table!(),
+                safety: empty_table!(),
+                expn_that_defined: empty_table!(),
+                params_in_repr: empty_table!(),
+                repr_options: empty_table!(),
+                def_keys: empty_table!(),
+                proc_macro_quoted_spans: empty_table!(),
+                variant_data: empty_table!(),
+                assoc_container: empty_table!(),
+                macro_definition: empty_table!(),
+                proc_macro: empty_table!(),
+                deduced_param_attrs: empty_table!(),
+                trait_impl_trait_tys: empty_table!(),
+                doc_link_resolutions: empty_table!(),
+                doc_link_traits_in_scope: empty_table!(),
+                assumed_wf_types_for_rpitit: empty_table!(),
+                opaque_ty_origin: empty_table!(),
+                anon_const_kind: empty_table!(),
+                adt_destructor: empty_table!(),
+                adt_async_destructor: empty_table!(),
+                default_fields: empty_table!(),
+            },
+
+            debugger_visualizers: LazyArray::default(),
+
+            exportable_items: LazyArray::default(),
+            stable_order_of_exportable_impls: LazyArray::default(),
+            exported_non_generic_symbols: LazyArray::default(),
+            exported_generic_symbols: LazyArray::default(),
+
+            syntax_contexts: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+            expn_data: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+            expn_hashes: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+
+            def_path_hash_map: LazyValue::from_position(NonZero::new(1).unwrap()),
+
+            source_map: LazyTable::from_position_and_encoded_size(NonZero::new(1).unwrap(), 0, 0),
+            target_modifiers: LazyArray::default(),
+
+            compiler_builtins: false,
+            needs_allocator: false,
+            needs_panic_runtime: false,
+            no_builtins: false,
+            panic_runtime: false,
+            profiler_runtime: false,
+            symbol_mangling_version: SymbolManglingVersion::V0,
+
+            specialization_enabled_in: false,
+        }
+    }
+
     pub(crate) fn is_proc_macro_crate(&self) -> bool {
         self.proc_macro_data.is_some()
     }
@@ -992,17 +1171,24 @@ impl<'a> CrateMetadataRef<'a> {
     }
 
     fn raw_proc_macro(self, id: DefIndex) -> &'a ProcMacro {
-        // DefIndex's in root.proc_macro_data have a one-to-one correspondence
-        // with items in 'raw_proc_macros'.
-        let pos = self
+        // For WASM proc macro stubs, the macros LazyArray is empty, so we use
+        // DefIndex directly as the array index (DefIndex 1 -> index 0, etc.)
+        let mut macros_iter = self
             .root
             .proc_macro_data
             .as_ref()
             .unwrap()
             .macros
-            .decode(self)
-            .position(|i| i == id)
-            .unwrap();
+            .decode(self);
+
+        let pos = if macros_iter.len() == 0 {
+            // WASM stub: DefIndex 1, 2, 3... maps to array index 0, 1, 2...
+            (id.as_u32() - 1) as usize
+        } else {
+            // Regular proc macro crate: search for the DefIndex
+            macros_iter.position(|i| i == id).unwrap()
+        };
+
         &self.raw_proc_macros.unwrap()[pos]
     }
 
@@ -1029,8 +1215,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_ident_span
             .get(self, item_index)
-            .unwrap_or_else(|| self.missing("def_ident_span", item_index))
-            .decode((self, sess));
+            .map(|s| s.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, use DUMMY_SP
+                if self.root.header.is_proc_macro_crate && self.root.tables.def_ident_span.len == 0 {
+                    DUMMY_SP
+                } else {
+                    self.missing("def_ident_span", item_index)
+                }
+            });
         Some(Ident::new(name, span))
     }
 
@@ -1048,7 +1241,31 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_kind
             .get(self, item_id)
-            .unwrap_or_else(|| self.missing("def_kind", item_id))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, return reasonable defaults
+                if self.root.header.is_proc_macro_crate && self.root.tables.def_kind.len == 0 {
+                    // DefIndex 0 is always the crate root
+                    if item_id.as_u32() == 0 {
+                        return DefKind::Mod;
+                    }
+
+                    // For proc macros (DefIndex 1, 2, 3...), determine the macro kind
+                    if let Some(raw_proc_macros) = self.raw_proc_macros {
+                        let idx = (item_id.as_u32() - 1) as usize;
+                        if idx < raw_proc_macros.len() {
+                            use rustc_span::hygiene::MacroKind;
+                            let macro_kind = match raw_proc_macros[idx] {
+                                ProcMacro::CustomDerive { .. } => MacroKind::Derive,
+                                ProcMacro::Attr { .. } => MacroKind::Attr,
+                                ProcMacro::Bang { .. } => MacroKind::Bang,
+                            };
+                            return DefKind::Macro(macro_kind.into());
+                        }
+                    }
+                }
+
+                self.missing("def_kind", item_id)
+            })
     }
 
     fn get_span(self, index: DefIndex, sess: &Session) -> Span {
@@ -1056,8 +1273,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_span
             .get(self, index)
-            .unwrap_or_else(|| self.missing("def_span", index))
-            .decode((self, sess))
+            .map(|s| s.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs with empty metadata, return DUMMY_SP
+                if self.root.header.is_proc_macro_crate && self.root.tables.def_span.len == 0 {
+                    DUMMY_SP
+                } else {
+                    self.missing("def_span", index)
+                }
+            })
     }
 
     fn load_proc_macro<'tcx>(self, id: DefIndex, tcx: TyCtxt<'tcx>) -> SyntaxExtension {
@@ -1181,9 +1405,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .visibility
             .get(self, id)
-            .unwrap_or_else(|| self.missing("visibility", id))
-            .decode(self)
-            .map_id(|index| self.local_def_id(index))
+            .map(|v| v.decode(self).map_id(|index| self.local_def_id(index)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, proc macros are always public
+                if self.root.header.is_proc_macro_crate && self.root.tables.visibility.len == 0 {
+                    Visibility::Public
+                } else {
+                    self.missing("visibility", id)
+                }
+            })
     }
 
     fn get_safety(self, id: DefIndex) -> Safety {
@@ -1199,8 +1429,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .expn_that_defined
             .get(self, id)
-            .unwrap_or_else(|| self.missing("expn_that_defined", id))
-            .decode((self, sess))
+            .map(|e| e.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, use the root expansion
+                if self.root.header.is_proc_macro_crate && self.root.tables.expn_that_defined.len == 0 {
+                    ExpnId::root()
+                } else {
+                    self.missing("expn_that_defined", id)
+                }
+            })
     }
 
     fn get_debugger_visualizers(self) -> Vec<DebuggerVisualizerFile> {
@@ -1380,6 +1617,11 @@ impl<'a> CrateMetadataRef<'a> {
             .attributes
             .get(self, id)
             .unwrap_or_else(|| {
+                // Check if this is a WASM stub with empty attributes
+                if self.root.header.is_proc_macro_crate && self.root.tables.attributes.len == 0 {
+                    // Return empty attributes for WASM stubs
+                    return LazyArray::default();
+                }
                 // Structure and variant constructors don't have any attributes encoded for them,
                 // but we assume that someone passing a constructor ID actually wants to look at
                 // the attributes on the corresponding struct or variant.
@@ -1533,7 +1775,53 @@ impl<'a> CrateMetadataRef<'a> {
             .def_key_cache
             .lock()
             .entry(index)
-            .or_insert_with(|| self.root.tables.def_keys.get(self, index).unwrap().decode(self))
+            .or_insert_with(|| {
+                // For WASM proc macro stubs with empty metadata, return synthetic def keys
+                if let Some(key) = self.root.tables.def_keys.get(self, index) {
+                    key.decode(self)
+                } else if self.root.header.is_proc_macro_crate && self.root.tables.def_keys.len == 0 {
+                    // DefIndex 0 is the crate root
+                    if index.as_u32() == 0 {
+                        return DefKey {
+                            parent: None,
+                            disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                                data: rustc_hir::definitions::DefPathData::CrateRoot,
+                                disambiguator: 0,
+                            },
+                        };
+                    }
+
+                    // For proc macros (DefIndex 1, 2, 3...), create a def key with the macro name
+                    if let Some(raw_proc_macros) = self.raw_proc_macros {
+                        let idx = (index.as_u32() - 1) as usize;
+                        if idx < raw_proc_macros.len() {
+                            let name = match raw_proc_macros[idx] {
+                                ProcMacro::CustomDerive { trait_name, .. } => trait_name,
+                                ProcMacro::Attr { name, .. } => name,
+                                ProcMacro::Bang { name, .. } => name,
+                            };
+                            return DefKey {
+                                parent: Some(rustc_span::def_id::DefIndex::from_u32(0)),
+                                disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                                    data: rustc_hir::definitions::DefPathData::ValueNs(Symbol::intern(name)),
+                                    disambiguator: 0,
+                                },
+                            };
+                        }
+                    }
+
+                    // Fallback: return crate root
+                    DefKey {
+                        parent: None,
+                        disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                            data: rustc_hir::definitions::DefPathData::CrateRoot,
+                            disambiguator: 0,
+                        },
+                    }
+                } else {
+                    bug!("def_key: no key for {:?}", index)
+                }
+            })
     }
 
     // Returns the path leading to the thing with this `id`.
@@ -1544,6 +1832,14 @@ impl<'a> CrateMetadataRef<'a> {
 
     #[inline]
     fn def_path_hash(self, index: DefIndex) -> DefPathHash {
+        // For WASM proc macro crates, generate synthetic unique hashes based on DefIndex
+        // since we don't have real metadata to decode from
+        if self.raw_proc_macros.is_some() {
+            // Use the DefIndex as the local hash to ensure uniqueness
+            let local_hash = rustc_hashes::Hash64::new(index.as_u32() as u64);
+            return DefPathHash::new(self.root.stable_crate_id, local_hash);
+        }
+        
         // This is a hack to workaround the fact that we can't easily encode/decode a Hash64
         // into the FixedSizeEncoding, as Hash64 lacks a Default impl. A future refactor to
         // relax the Default restriction will likely fix this.
@@ -1860,6 +2156,76 @@ impl<'a> CrateMetadataRef<'a> {
 }
 
 impl CrateMetadata {
+        /// Create CrateMetadata for WASM proc macro stubs without decoding from the blob
+    /// Since WASM proc macros don't have real metadata, we skip all decoding operations
+    #[cfg(target_family = "wasm")]
+    pub(crate) fn new_wasm_proc_macro_stub(
+        blob: MetadataBlob,
+        root: CrateRoot,
+        raw_proc_macros: Option<&'static [ProcMacro]>,
+        cnum: CrateNum,
+        cnum_map: CrateNumMap,
+        dep_kind: CrateDepKind,
+        source: CrateSource,
+        stable_crate_id: StableCrateId,
+        proc_macro_count: usize,
+    ) -> CrateMetadata {
+        use rustc_data_structures::owned_slice::slice_owned;
+        use rustc_data_structures::sync::Lock;
+        use std::sync::Arc;
+        use rustc_hir::def_path_hash_map::Config as HashMapConfig;
+        use rustc_hashes::Hash64;
+        use rustc_span::def_id::DefIndex;
+
+        // Create DefPathHashMap with entries for each proc macro
+        // The hash map uses Hash64 (local hash) as key and DefIndex as value
+        // DefIndex 0 is the crate root, DefIndex 1..=proc_macro_count are the macros
+        let capacity = proc_macro_count + 1; // +1 for crate root
+        let mut hash_table: rustc_hir::def_path_hash_map::DefPathHashMap =
+            odht::HashTableOwned::with_capacity(capacity, 80u8);
+        
+        // Add entry for crate root (DefIndex 0) with local hash 0
+        let root_local_hash = Hash64::new(0);
+        hash_table.insert(&root_local_hash, &DefIndex::from_u32(0));
+        
+        // Add entries for each proc macro (DefIndex 1..=proc_macro_count)
+        // Each gets a unique local hash based on its index
+        for i in 1..=proc_macro_count {
+            let local_hash = Hash64::new(i as u64);
+            hash_table.insert(&local_hash, &DefIndex::from_u32(i as u32));
+        }
+
+        let raw_bytes = hash_table.raw_bytes();
+        let owned_slice = slice_owned(raw_bytes.to_vec(), std::ops::Deref::deref);
+        let def_path_hash_map = odht::HashTable::<HashMapConfig, _>::from_raw_bytes(owned_slice)
+            .map(DefPathHashMapRef::OwnedFromMetadata)
+            .expect("Failed to create DefPathHashMapRef with proc macro entries");
+
+        // For WASM proc macros, skip all decoding - just create empty structures
+        // Use Lock::new_no_sync() to avoid parking_lot issues on WASM
+        CrateMetadata {
+            blob,
+            root,
+            trait_impls: Default::default(),
+            incoherent_impls: Default::default(),
+            raw_proc_macros,
+            source_map_import_info: Lock::new_no_sync(Vec::new()),
+            def_path_hash_map,
+            expn_hash_map: Default::default(),
+            alloc_decoding_state: AllocDecodingState::new(Vec::new()),
+            cnum,
+            cnum_map,
+            dependencies: Vec::new(),
+            dep_kind,
+            source: Arc::new(source),
+            private_dep: false,
+            host_hash: None,
+            used: false,
+            extern_crate: None,
+            hygiene_context: Default::default(),
+            def_key_cache: Default::default(),
+        }
+    }
     pub(crate) fn new(
         sess: &Session,
         cstore: &CStore,

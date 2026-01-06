@@ -4348,6 +4348,7 @@ dependencies = [
  "rustc_feature",
  "rustc_fluent_macro",
  "rustc_fs_util",
+ "rustc_hashes",
  "rustc_hir",
  "rustc_hir_pretty",
  "rustc_incremental",
@@ -4359,6 +4360,7 @@ dependencies = [
  "rustc_session",
  "rustc_span",
  "rustc_target",
+ "rustc_watt_runtime",
  "tempfile",
  "tracing",
 ]
@@ -4964,6 +4966,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rustc_watt_runtime"
+version = "0.0.0"
+dependencies = [
+ "rustc_proc_macro",
+]
+
+[[package]]
 name = "rustc_windows_rc"
 version = "0.0.0"
 dependencies = [
@@ -5515,8 +5524,7 @@ dependencies = [
 [[package]]
 name = "synstructure"
 version = "0.13.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "728a70f3dbaf5bab7f0c4b1ac8d7ae5ea60a4b5549c8a5914361c99147a709d2"
+source = "git+https://github.com/macovedj/synstructure#cf719efe5d0249ee599823f0c723e0f852b62369"
 dependencies = [
  "proc-macro2",
  "quote",

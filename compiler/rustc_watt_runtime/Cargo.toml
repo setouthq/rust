@@ -1,0 +1,8 @@
+[package]
+name = "rustc_watt_runtime"
+version = "0.0.0"
+edition = "2021"
+description = "WebAssembly runtime for executing procedural macros (vendored from watt)"
+
+[dependencies]
+rustc_proc_macro = { path = "../rustc_proc_macro" }
