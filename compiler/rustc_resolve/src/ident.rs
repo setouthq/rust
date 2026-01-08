@@ -3,7 +3,7 @@ use Namespace::*;
 use rustc_ast::{self as ast, NodeId};
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{DefKind, MacroKinds, Namespace, NonMacroAttrKind, PartialRes, PerNS};
-use rustc_middle::{bug, span_bug};
+use rustc_middle::{bug, span_bug, ty::Visibility};
 use rustc_session::lint::builtin::PROC_MACRO_DERIVE_RESOLUTION_FALLBACK;
 use rustc_session::parse::feature_err;
 use rustc_span::hygiene::{ExpnId, ExpnKind, LocalExpnId, MacroKind, SyntaxContext};
@@ -544,11 +544,32 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         }
                     }
                     Scope::MacroUsePrelude => {
-                        match this.macro_use_prelude.get(&ident.name).cloned() {
-                            Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
-                            None => Err(Determinacy::determined(
-                                this.graph_root.unexpanded_invocations.borrow().is_empty(),
-                            )),
+                        // First check WASM proc macros loaded via --wasm-proc-macro
+                        if this.wasm_proc_macros.contains_key(&ident.name) {
+                            eprintln!("[RESOLVER] Found WASM proc macro: {}", ident.name);
+
+                            // Find the DefId for this macro name by searching the reverse map
+                            let def_id = this.wasm_proc_macro_def_id_to_name
+                                .iter()
+                                .find(|(_, name)| **name == ident.name)
+                                .map(|(def_id, _)| *def_id)
+                                .expect("WASM proc macro should have a DefId mapping");
+
+                            eprintln!("[RESOLVER] Using DefId {:?} for WASM proc macro {}", def_id, ident.name);
+
+                            // Create a NameBinding with the unique DefId
+                            let res = Res::Def(DefKind::Macro(MacroKind::Derive.into()), def_id);
+                            let binding = this.arenas.new_pub_res_binding(res, ident.span, LocalExpnId::ROOT);
+                            // Return early with the binding and flags
+                            Ok((binding, Flags::MISC_FROM_PRELUDE))
+                        } else {
+                            // Then check macro_use_prelude
+                            match this.macro_use_prelude.get(&ident.name).cloned() {
+                                Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
+                                None => Err(Determinacy::determined(
+                                    this.graph_root.unexpanded_invocations.borrow().is_empty(),
+                                )),
+                            }
                         }
                     }
                     Scope::BuiltinAttrs => match this.builtin_attrs_bindings.get(&ident.name) {

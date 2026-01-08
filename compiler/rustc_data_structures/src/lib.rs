@@ -25,6 +25,7 @@
 #![feature(extend_one)]
 #![feature(file_buffered)]
 #![feature(map_try_insert)]
+#![feature(mapped_lock_guards)]
 #![feature(min_specialization)]
 #![feature(negative_impls)]
 #![feature(never_type)]
