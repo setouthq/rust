@@ -94,3 +94,7 @@ debug = 0
 [profile.dev.package]
 # Only use debuginfo=1 to further reduce compile times.
 bootstrap.debug = 1
+
+[patch.crates-io]
+synstructure = { git = "https://github.com/macovedj/synstructure" }
+

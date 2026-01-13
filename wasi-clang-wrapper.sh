@@ -36,9 +36,9 @@ for arg in "$@"; do
     esac
 done
 
-exec /home/ubuntu/1.92/rust/wasi-sdk-28.0-arm64-linux/bin/clang \
+exec /home/ubuntu/1.92/rust/wasi-sdk-29.0-arm64-linux/bin/clang \
     --target=wasm32-wasip1-threads \
-    --sysroot=/home/ubuntu/1.92/rust/wasi-sdk-28.0-arm64-linux/share/wasi-sysroot \
+    --sysroot=/home/ubuntu/1.92/rust/wasi-sdk-29.0-arm64-linux/share/wasi-sysroot \
     -lwasi-emulated-signal \
     -lwasi-emulated-process-clocks \
     -lwasi-emulated-mman \

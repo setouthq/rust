@@ -23,6 +23,7 @@ libloading = { version = "0.8.0", optional = true }
 smallvec = "1.8.1"
 
 [patch.crates-io]
+synstructure = { git = "https://github.com/macovedj/synstructure" }
 # Uncomment to use an unreleased version of cranelift
 #cranelift-codegen = { git = "https://github.com/bytecodealliance/wasmtime.git", branch = "release-34.0.0", version = "0.121.0" }
 #cranelift-frontend = { git = "https://github.com/bytecodealliance/wasmtime.git", branch = "release-34.0.0", version = "0.121.0" }
