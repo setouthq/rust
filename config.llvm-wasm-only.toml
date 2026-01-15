@@ -1,0 +1,6 @@
+# Override for a wasm-only LLVM build used for the final stage.
+include = ["config.llvm.toml"]
+
+[llvm]
+targets = "WebAssembly"
+experimental-targets = ""
