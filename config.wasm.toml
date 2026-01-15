@@ -1,0 +1,149 @@
+# Configuration for building the Rust compiler with LLVM targeting WebAssembly ONLY
+#
+# This configuration produces a Rust compiler (rustc) that includes only the
+# WebAssembly LLVM backend in the final binary. This is useful for:
+#   - Minimizing binary size when you only need Wasm compilation
+#   - Building a specialized rustc for Wasm-only toolchains
+#   - Embedded/constrained environments
+#
+# Usage:
+#   cp config.wasm.toml config.toml
+#   ./x.py build --stage 2 compiler
+#   # or use the provided script:
+#   ./build-wasm-compiler.sh
+#
+# IMPORTANT: The LLVM targets setting affects what the final rustc binary can
+# compile TO, not what it runs ON. The bootstrap process will use your host
+# compiler to build the compiler itself.
+
+# Use the compiler profile as base (builds rustc and its dependencies)
+profile = "compiler"
+
+# Change ID to track config compatibility
+change-id = 9999999
+
+[rust]
+# Only use LLVM codegen backend (no cranelift, etc.)
+codegen-backends = ["llvm"]
+
+# Disable warnings to reduce noise during build
+deny-warnings = false
+
+# Disable LLVM bitcode linker (not needed for Wasm-only builds)
+llvm-bitcode-linker = false
+
+# Optimize for size - good for Wasm toolchains
+optimize = "s"
+
+# Strip debug info from the final binary
+debug = false
+debuginfo-level = 0
+
+# Strip symbols to reduce binary size
+strip = true
+
+# Single codegen unit for better optimization
+codegen-units = 1
+codegen-units-std = 1
+
+# Don't build LLVM tools (llvm-ar, llvm-nm, etc.) - not needed for Wasm
+llvm-tools = false
+
+# Use stable channel
+channel = "stable"
+
+# Uncomment for even smaller binaries (at cost of longer build time)
+#lto = "thin"
+
+[llvm]
+# Build LLVM statically to avoid runtime dependencies
+static-libstdcpp = true
+
+# Use make instead of ninja (more portable)
+ninja = false
+
+# Don't download pre-built LLVM - we need custom target configuration
+download-ci-llvm = false
+
+# Link LLVM statically into rustc
+link-shared = false
+
+# ============================================================================
+# KEY SETTING: Only include WebAssembly target in LLVM
+# ============================================================================
+# This is the critical setting that makes the final rustc binary only include
+# WebAssembly LLVM instructions. The resulting compiler will ONLY be able to
+# compile Rust code to WebAssembly targets (wasm32-*, wasm64-*).
+#
+# If you need to compile to other targets as well, add them here:
+#   - "WebAssembly"              - Wasm only
+#   - "WebAssembly;X86"          - Wasm + x86/x86_64
+#   - "WebAssembly;AArch64"      - Wasm + ARM64
+#   - "WebAssembly;X86;AArch64"  - Wasm + both x86 and ARM64
+targets = "WebAssembly"
+
+# No experimental targets needed
+experimental-targets = ""
+
+# Optimize LLVM build
+optimize = true
+
+# Don't include debug info in LLVM (reduces size)
+release-debuginfo = false
+
+# Uncomment for even more size reduction (longer build time)
+#thin-lto = true
+
+[build]
+# Don't build documentation
+docs = false
+
+# Don't build extended tools (cargo, rustfmt, etc.)
+extended = false
+
+# Don't build any tools
+tools = []
+
+# Host is the platform running the compiler (where rustc executes)
+# This should be your build machine's target triple
+# Uncomment and set to your host if cross-compiling:
+#host = ["x86_64-unknown-linux-gnu"]
+
+# Target is what the compiler will compile FOR (WebAssembly variants)
+target = [
+    "wasm32-wasip1",
+    "wasm32-wasip1-threads",
+    "wasm32-unknown-unknown",
+    # Add more Wasm targets as needed:
+    #"wasm32-wasip2",
+    #"wasm64-unknown-unknown",
+]
+
+# Statically link Cargo's native dependencies
+cargo-native-static = true
+
+[install]
+# Where to install the compiler
+prefix = "dist"
+sysconfdir = "etc"
+
+# ============================================================================
+# Target-specific configuration for WebAssembly targets
+# ============================================================================
+# You'll need to configure the WASI SDK path for wasm32-wasip1* targets.
+# Download from: https://github.com/WebAssembly/wasi-sdk/releases
+
+[target.'wasm32-wasip1']
+# Uncomment and set to your WASI SDK paths:
+#wasi-root = "/path/to/wasi-sdk/share/wasi-sysroot"
+#linker = "/path/to/wasi-sdk/bin/clang"
+codegen-backends = ["llvm"]
+
+[target.'wasm32-wasip1-threads']
+# Uncomment and set to your WASI SDK paths:
+#wasi-root = "/path/to/wasi-sdk/share/wasi-sysroot"
+#linker = "/path/to/wasi-sdk/bin/clang"
+codegen-backends = ["llvm"]
+
+[target.'wasm32-unknown-unknown']
+codegen-backends = ["llvm"]
