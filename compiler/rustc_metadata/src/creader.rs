@@ -840,8 +840,20 @@ impl CStore {
                 }),
                 None => (&source, &crate_root),
             };
-            let dlsym_dylib = dlsym_source.dylib.as_ref().expect("no dylib for a proc-macro crate");
-            Some(self.dlsym_proc_macros(tcx.sess, &dlsym_dylib.0, dlsym_root.stable_crate_id())?)
+            // For proc-macro crates, we need to find the executable.
+            // Prefer dylib, but fall back to rmeta (which can have .wasm next to it on WASM targets)
+            let proc_macro_path = if let Some((dylib_path, _)) = &dlsym_source.dylib {
+                dylib_path.clone()
+            } else if let Some((rmeta_path, _)) = &dlsym_source.rmeta {
+                // On WASM targets, dlsym_proc_macros will look for .wasm next to .rmeta
+                rmeta_path.clone()
+            } else if let Some((rlib_path, _)) = &dlsym_source.rlib {
+                // Try rlib as fallback
+                rlib_path.clone()
+            } else {
+                panic!("no dylib, rmeta, or rlib for a proc-macro crate");
+            };
+            Some(self.dlsym_proc_macros(tcx.sess, &proc_macro_path, dlsym_root.stable_crate_id())?)
         } else {
             None
         };
@@ -1133,11 +1145,28 @@ impl CStore {
         path: &Path,
         stable_crate_id: StableCrateId,
     ) -> Result<&'static [ProcMacro], CrateError> {
-        // Check if the file is a WASM module
+        // If path is .rmeta, look for corresponding .wasm
+        // Note: rmeta files have lib prefix (libfoo.rmeta) but wasm files do not (foo.wasm)
         #[cfg(target_family = "wasm")]
         {
-            if path.extension().and_then(|s| s.to_str()) == Some("wasm") {
-                return self.dlsym_proc_macros_wasm(path, stable_crate_id);
+            let wasm_path = if path.extension().and_then(|s| s.to_str()) == Some("rmeta") {
+                // Strip lib prefix: libfoo.rmeta -> foo.wasm
+                let parent = path.parent().unwrap_or(std::path::Path::new("."));
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let wasm_name = if stem.starts_with("lib") {
+                    format!("{}.wasm", &stem[3..])
+                } else {
+                    format!("{}.wasm", stem)
+                };
+                parent.join(wasm_name)
+            } else if path.extension().and_then(|s| s.to_str()) == Some("wasm") {
+                path.to_path_buf()
+            } else {
+                path.with_extension("wasm")
+            };
+
+            if wasm_path.exists() {
+                return self.dlsym_proc_macros_wasm(&wasm_path, stable_crate_id);
             }
         }
 
