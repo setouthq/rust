@@ -216,6 +216,9 @@ pub(crate) struct CrateHeader {
     ///
     /// This is used inside rlibs and dylibs when using `-Zembed-metadata=no`.
     pub(crate) is_stub: bool,
+    /// Whether this cdylib is a watt proc-macro crate.
+    /// If true, the proc-macro functionality is loaded from a .wasm file via watt.
+    pub(crate) is_watt_proc_macro: bool,
 }
 
 /// Serialized `.rmeta` data for a crate.

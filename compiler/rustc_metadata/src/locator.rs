@@ -366,6 +366,7 @@ impl<'a> CrateLocator<'a> {
         &self,
         crate_rejections: &mut CrateRejections,
     ) -> Result<Option<Library>, CrateError> {
+        eprintln!("[LOCATOR] maybe_load_library_crate for {}: exact_paths={}, is_proc_macro={}", self.crate_name, self.exact_paths.len(), self.is_proc_macro);
         if !self.exact_paths.is_empty() {
             return self.find_commandline_library(crate_rejections);
         }
@@ -579,6 +580,8 @@ impl<'a> CrateLocator<'a> {
         flavor: CrateFlavor,
         slot: &mut Option<(Svh, MetadataBlob, PathBuf, CrateFlavor)>,
     ) -> Result<Option<(PathBuf, PathKind)>, CrateError> {
+        eprintln!("  [EXTRACT_ONE] flavor={:?}, m.len()={}, slot.is_some()={}, needs_crate_flavor={}", 
+                  flavor, m.len(), slot.is_some(), self.needs_crate_flavor(flavor));
         // If we are producing an rlib, and we've already loaded metadata, then
         // we should not attempt to discover further crate sources (unless we're
         // locating a proc macro; exact logic is in needs_crate_flavor). This means
@@ -616,10 +619,12 @@ impl<'a> CrateLocator<'a> {
                 Some(self.crate_name),
             ) {
                 Ok(blob) => {
+                    eprintln!("  [EXTRACT_ONE] Successfully loaded metadata blob for {:?}", lib);
                     if let Some(h) = self.crate_matches(crate_rejections, &blob, &lib) {
+                        eprintln!("  [EXTRACT_ONE] crate_matches returned hash: {:?}", h);
                         (h, blob)
                     } else {
-                        info!("metadata mismatch");
+                        eprintln!("  [EXTRACT_ONE] crate_matches returned None - mismatch");
                         continue;
                     }
                 }
@@ -627,8 +632,8 @@ impl<'a> CrateLocator<'a> {
                     // The file was present and created by the same compiler version, but we
                     // couldn't load it for some reason. Give a hard error instead of silently
                     // ignoring it, but only if we would have given an error anyway.
-                    info!(
-                        "Rejecting via version: expected {} got {}",
+                    eprintln!(
+                        "  [EXTRACT_ONE] VersionMismatch: expected {} got {}",
                         expected_version, found_version
                     );
                     crate_rejections
@@ -637,7 +642,7 @@ impl<'a> CrateLocator<'a> {
                     continue;
                 }
                 Err(MetadataError::LoadFailure(err)) => {
-                    info!("no metadata found: {}", err);
+                    eprintln!("  [EXTRACT_ONE] MetadataError::LoadFailure: {}", err);
                     // Metadata was loaded from interface file earlier.
                     if let Some((.., CrateFlavor::SDylib)) = slot {
                         ret = Some((lib, kind));
@@ -650,7 +655,7 @@ impl<'a> CrateLocator<'a> {
                     continue;
                 }
                 Err(err @ MetadataError::NotPresent(_)) => {
-                    info!("no metadata found: {}", err);
+                    eprintln!("  [EXTRACT_ONE] MetadataError::NotPresent: {}", err);
                     continue;
                 }
             };
@@ -731,11 +736,11 @@ impl<'a> CrateLocator<'a> {
         libpath: &Path,
     ) -> Option<Svh> {
         let header = metadata.get_header();
+        eprintln!("  [CRATE_MATCHES] crate={}, is_proc_macro={}, header.is_proc_macro_crate={}, header.is_watt_proc_macro={}",
+                  header.name, self.is_proc_macro, header.is_proc_macro_crate, header.is_watt_proc_macro);
         if header.is_proc_macro_crate != self.is_proc_macro {
-            info!(
-                "Rejecting via proc macro: expected {} got {}",
-                self.is_proc_macro, header.is_proc_macro_crate,
-            );
+            eprintln!("  [CRATE_MATCHES] Rejecting via proc macro: expected {} got {}",
+                self.is_proc_macro, header.is_proc_macro_crate);
             return None;
         }
 
@@ -744,13 +749,17 @@ impl<'a> CrateLocator<'a> {
             return None;
         }
 
-        if header.triple != self.tuple {
-            info!("Rejecting via crate triple: expected {} got {}", self.tuple, header.triple);
+        // Skip triple check for watt proc-macros - WASM is portable across targets
+        if header.triple != self.tuple && !header.is_watt_proc_macro {
+            eprintln!("  [CRATE_MATCHES] Rejecting via triple: expected {} got {}", self.tuple, header.triple);
             crate_rejections.via_triple.push(CrateMismatch {
                 path: libpath.to_path_buf(),
                 got: header.triple.to_string(),
             });
             return None;
+        }
+        if header.is_watt_proc_macro && header.triple != self.tuple {
+            eprintln!("  [CRATE_MATCHES] Skipping triple check for watt proc-macro: {} vs {}", self.tuple, header.triple);
         }
 
         let hash = header.hash;
@@ -771,6 +780,10 @@ impl<'a> CrateLocator<'a> {
         &self,
         crate_rejections: &mut CrateRejections,
     ) -> Result<Option<Library>, CrateError> {
+        eprintln!("[LOCATOR] find_commandline_library for {} with {} exact_paths", self.crate_name, self.exact_paths.len());
+        for loc in &self.exact_paths {
+            eprintln!("  [LOCATOR] exact_path: {:?}", loc.original());
+        }
         // First, filter out all libraries that look suspicious. We only accept
         // files which actually exist that have the correct naming scheme for
         // rlibs/dylibs.
@@ -802,6 +815,7 @@ impl<'a> CrateLocator<'a> {
                     continue;
                 }
                 if file.ends_with(".rmeta") {
+                    eprintln!("  [LOCATOR] Found rmeta file: {}", file);
                     rmetas.insert(loc_canon.clone(), PathKind::ExternFlag);
                     continue;
                 }
@@ -821,8 +835,12 @@ impl<'a> CrateLocator<'a> {
         }
 
         // Extract the dylib/rlib/rmeta triple.
-        self.extract_lib(crate_rejections, rlibs, rmetas, dylibs, sdylib_interfaces)
-            .map(|opt| opt.map(|(_, lib)| lib))
+        eprintln!("  [LOCATOR] Before extract_lib: rlibs={}, rmetas={}, dylibs={}", rlibs.len(), rmetas.len(), dylibs.len());
+        eprintln!("  [LOCATOR] crate_rejections via_filename={}", crate_rejections.via_filename.len());
+        let result = self.extract_lib(crate_rejections, rlibs, rmetas, dylibs, sdylib_interfaces)
+            .map(|opt| opt.map(|(_, lib)| lib));
+        eprintln!("  [LOCATOR] extract_lib result: {:?}", result.as_ref().map(|r| r.is_some()));
+        result
     }
 
     pub(crate) fn into_error(

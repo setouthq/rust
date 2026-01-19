@@ -725,6 +725,11 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     hash: tcx.crate_hash(LOCAL_CRATE),
                     is_proc_macro_crate: proc_macro_data.is_some(),
                     is_stub: false,
+                    is_watt_proc_macro: {
+                        let flag = tcx.sess.opts.watt_cdylib_proc_macro;
+                        eprintln!("[ENCODER] Setting is_watt_proc_macro={} in CrateHeader", flag);
+                        flag
+                    },
                 },
                 extra_filename: tcx.sess.opts.cg.extra_filename.clone(),
                 stable_crate_id: tcx.def_path_hash(LOCAL_CRATE.as_def_id()).stable_crate_id(),
@@ -1922,10 +1927,23 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
     }
 
     fn encode_proc_macros(&mut self) -> Option<ProcMacroData> {
-        let is_proc_macro = self.tcx.crate_types().contains(&CrateType::ProcMacro);
+        let is_watt_cdylib = self.tcx.sess.opts.watt_cdylib_proc_macro;
+        let is_proc_macro = self.tcx.crate_types().contains(&CrateType::ProcMacro)
+            || is_watt_cdylib;
+        eprintln!("
+
+
+=== ENCODER DEBUG: is_watt_cdylib={}, is_proc_macro={} ===
+
+
+", is_watt_cdylib, is_proc_macro);
         if is_proc_macro {
             let tcx = self.tcx;
-            let proc_macro_decls_static = tcx.proc_macro_decls_static(()).unwrap().local_def_index;
+            // For watt cdylib crates, proc_macro_decls_static doesn't exist (we skip mk_decls)
+            // Use a dummy value in that case
+            let proc_macro_decls_static = tcx.proc_macro_decls_static(())
+                .map(|d| d.local_def_index)
+                .unwrap_or(rustc_hir::def_id::CRATE_DEF_INDEX);
             let stability = tcx.lookup_stability(CRATE_DEF_ID);
             let macros =
                 self.lazy_array(tcx.resolutions(()).proc_macros.iter().map(|p| p.local_def_index));
@@ -1969,6 +1987,27 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                 {
                     name = *trait_name;
                     MacroKind::Derive
+                } else if self.tcx.sess.opts.watt_cdylib_proc_macro {
+                    // For watt cdylib, determine macro type from function name
+                    let fn_name = name.as_str();
+                    if fn_name.starts_with("derive_") {
+                        // Extract trait name and capitalize first letter
+                        let trait_name = &fn_name[7..];
+                        if !trait_name.is_empty() {
+                            let trait_name_cap = trait_name.chars().next().unwrap().to_uppercase().to_string()
+                                + &trait_name[1..];
+                            name = Symbol::intern(&trait_name_cap);
+                        }
+                        MacroKind::Derive
+                    } else if fn_name.starts_with("attr_") {
+                        let attr_name = &fn_name[5..];
+                        if !attr_name.is_empty() {
+                            name = Symbol::intern(attr_name);
+                        }
+                        MacroKind::Attr
+                    } else {
+                        MacroKind::Bang
+                    }
                 } else {
                     bug!("Unknown proc-macro type for item {:?}", id);
                 };
@@ -2359,6 +2398,9 @@ impl<D: Decoder> Decodable<D> for EncodedMetadata {
 
 #[instrument(level = "trace", skip(tcx))]
 pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path, ref_path: Option<&Path>) {
+    eprintln!("
+=== ENCODE_METADATA CALLED: watt_flag={} ===
+", tcx.sess.opts.watt_cdylib_proc_macro);
     // Since encoding metadata is not in a query, and nothing is cached,
     // there's no need to do dep-graph tracking for any of it.
     tcx.dep_graph.assert_ignored();
@@ -2374,6 +2416,7 @@ pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path, ref_path: Option<&Path>) {
                 hash: tcx.crate_hash(LOCAL_CRATE),
                 is_proc_macro_crate: false,
                 is_stub: true,
+                is_watt_proc_macro: tcx.sess.opts.watt_cdylib_proc_macro,
             });
             header.position.get()
         })

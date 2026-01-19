@@ -287,6 +287,52 @@ impl CStore {
         self.iter_crate_data().flat_map(|(krate, data)| data.proc_macros_for_crate(krate, self))
     }
 
+    /// Get watt proc-macros for a crate, if it is a watt proc-macro crate
+    /// Returns None if the crate is not a watt proc-macro crate
+    pub fn get_watt_proc_macros<'tcx>(
+        &self,
+        cnum: CrateNum,
+        tcx: TyCtxt<'tcx>,
+    ) -> Option<Vec<(Symbol, Arc<rustc_expand::base::SyntaxExtension>, DefId)>> {
+        use rustc_span::Symbol;
+        use std::sync::Arc;
+        let crate_data = self.get_crate_data(cnum);
+        // CrateMetadataRef derefs to CrateMetadata, so we can call is_watt_proc_macro
+        if !crate_data.is_watt_proc_macro() {
+            return None;
+        }
+        
+        // Get raw_proc_macros and convert to SyntaxExtensions
+        let raw_macros = match crate_data.raw_proc_macros() {
+            Some(m) => {
+                m
+            }
+            None => {
+                return None;
+            }
+        };
+        
+        // Get the actual DefIndex values from proc_macro_data.macros
+        let proc_macro_indices: Vec<DefIndex> = crate_data.proc_macro_def_indices(self);
+        
+        let mut result = Vec::new();
+        for (i, pm) in raw_macros.iter().enumerate() {
+            // Use actual DefIndex from proc_macro_data if available, otherwise synthetic
+            let def_index = proc_macro_indices.get(i).copied()
+                .unwrap_or_else(|| DefIndex::from_u32((i + 1) as u32));
+            let ext = crate_data.load_proc_macro(def_index, tcx);
+            let name = match pm {
+                rustc_proc_macro::bridge::client::ProcMacro::CustomDerive { trait_name, .. } => Symbol::intern(trait_name),
+                rustc_proc_macro::bridge::client::ProcMacro::Attr { name, .. } => Symbol::intern(name),
+                rustc_proc_macro::bridge::client::ProcMacro::Bang { name, .. } => Symbol::intern(name),
+            };
+            let def_id = DefId { krate: cnum, index: def_index };
+            result.push((name, Arc::new(ext), def_id));
+        }
+        Some(result)
+    }
+
+
     fn push_dependencies_in_postorder(&self, deps: &mut IndexSet<CrateNum>, cnum: CrateNum) {
         if !deps.contains(&cnum) {
             let data = self.get_crate_data(cnum);
@@ -471,7 +517,7 @@ impl CStore {
         }
         let mods = tcx.sess.opts.gather_target_modifiers();
         for (_cnum, data) in self.iter_crate_data() {
-            if data.is_proc_macro_crate() {
+            if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                 continue;
             }
             let dep_mods = data.target_modifiers();
@@ -487,7 +533,7 @@ impl CStore {
             return;
         }
         for (_cnum, data) in self.iter_crate_data() {
-            if data.is_proc_macro_crate() {
+            if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                 continue;
             }
             if data.has_async_drops() {
@@ -830,8 +876,10 @@ impl CStore {
             // Use pre-loaded proc macros (e.g., from WASM)
             debug!("Using {} pre-loaded proc macros", pre_loaded.len());
             Some(pre_loaded)
-        } else if crate_root.is_proc_macro_crate() {
-            // Load proc macros from dylib using dlsym
+        } else if crate_root.is_proc_macro_crate() || crate_root.is_watt_proc_macro() {
+            eprintln!("[CREADER] Loading proc macros for crate, is_proc_macro_crate={}, is_watt_proc_macro={}",
+                crate_root.is_proc_macro_crate(), crate_root.is_watt_proc_macro());
+            // Load proc macros from dylib (or .wasm for watt proc-macros)
             let temp_root;
             let (dlsym_source, dlsym_root) = match &host_lib {
                 Some(host_lib) => (&host_lib.source, {
@@ -853,6 +901,7 @@ impl CStore {
             } else {
                 panic!("no dylib, rmeta, or rlib for a proc-macro crate");
             };
+            eprintln!("[CREADER] proc_macro_path={:?}", proc_macro_path);
             Some(self.dlsym_proc_macros(tcx.sess, &proc_macro_path, dlsym_root.stable_crate_id())?)
         } else {
             None
@@ -1014,7 +1063,9 @@ impl CStore {
             let mut crate_rejections = CrateRejections::default();
 
             match self.load(&mut locator, &mut crate_rejections)? {
-                Some(res) => (res, None),
+                Some(res) => {
+                    (res, None)
+                },
                 None => {
                     info!("falling back to loading proc_macro");
                     dep_kind = CrateDepKind::MacrosOnly;
@@ -1025,8 +1076,12 @@ impl CStore {
                         path_kind,
                         host_hash,
                     )? {
-                        Some(res) => res,
-                        None => return Err(locator.into_error(crate_rejections, dep_root.cloned())),
+                        Some(res) => {
+                            res
+                        },
+                        None => {
+                            return Err(locator.into_error(crate_rejections, dep_root.cloned()))
+                        },
                     }
                 }
             }
@@ -1042,7 +1097,7 @@ impl CStore {
                 let private_dep =
                     self.is_private_dep(&tcx.sess.opts.externs, name, private_dep, origin);
                 let data = self.get_crate_data_mut(cnum);
-                if data.is_proc_macro_crate() {
+                if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                     dep_kind = CrateDepKind::MacrosOnly;
                 }
                 data.set_dep_kind(cmp::max(data.dep_kind(), dep_kind));
@@ -1165,6 +1220,7 @@ impl CStore {
                 path.with_extension("wasm")
             };
 
+            eprintln!("[DLSYM] Looking for wasm at: {:?}, exists: {}", wasm_path, wasm_path.exists());
             if wasm_path.exists() {
                 return self.dlsym_proc_macros_wasm(&wasm_path, stable_crate_id);
             }

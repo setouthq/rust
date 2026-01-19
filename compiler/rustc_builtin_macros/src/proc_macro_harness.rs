@@ -46,6 +46,7 @@ struct CollectProcMacros<'a> {
     source_map: &'a SourceMap,
     is_proc_macro_crate: bool,
     is_test_crate: bool,
+    is_watt_cdylib: bool,
 }
 
 pub fn inject(
@@ -58,9 +59,13 @@ pub fn inject(
     is_test_crate: bool,
     dcx: DiagCtxtHandle<'_>,
 ) {
+    eprintln!("[HARNESS INJECT] is_proc_macro_crate={}, has_proc_macro_decls={}, watt_cdylib_proc_macro={}",
+              is_proc_macro_crate, has_proc_macro_decls, sess.opts.watt_cdylib_proc_macro);
+    
     let ecfg = ExpansionConfig::default(sym::proc_macro, features);
     let mut cx = ExtCtxt::new(sess, ecfg, resolver, None);
 
+    let is_watt_cdylib = sess.opts.watt_cdylib_proc_macro;
     let mut collect = CollectProcMacros {
         macros: Vec::new(),
         in_root: true,
@@ -69,12 +74,21 @@ pub fn inject(
         source_map: sess.source_map(),
         is_proc_macro_crate,
         is_test_crate,
+        is_watt_cdylib,
     };
 
     if has_proc_macro_decls || is_proc_macro_crate {
         visit::walk_crate(&mut collect, krate);
     }
     let macros = collect.macros;
+    eprintln!("[HARNESS INJECT] After walk_crate: discovered {} macros", macros.len());
+    for m in &macros {
+        match m {
+            ProcMacro::Derive(d) => eprintln!("  - Derive: {}", d.trait_name),
+            ProcMacro::Attr(a) => eprintln!("  - Attr: {:?}", a.id),
+            ProcMacro::Bang(b) => eprintln!("  - Bang: {:?}", b.id),
+        }
+    }
 
     if !is_proc_macro_crate {
         return;
@@ -84,8 +98,22 @@ pub fn inject(
         return;
     }
 
-    let decls = mk_decls(&mut cx, &macros);
-    krate.items.push(decls);
+    // For watt cdylib crates, skip mk_decls (which generates incompatible runtime code)
+    // but still call declare_proc_macro to register them for metadata emission
+    if collect.is_watt_cdylib {
+        // Manually call declare_proc_macro for each discovered macro
+        for m in &macros {
+            let id = match m {
+                ProcMacro::Derive(d) => d.id,
+                ProcMacro::Attr(a) | ProcMacro::Bang(a) => a.id,
+            };
+            cx.resolver.declare_proc_macro(id);
+        }
+    } else {
+        let decls = mk_decls(&mut cx, &macros);
+        krate.items.push(decls);
+    }
+    
     // For WASM targets, generate metadata in a format that can be extracted
     // by the watt runtime loader
     if sess.target.llvm_target.contains("wasm") {
@@ -96,6 +124,10 @@ pub fn inject(
 
 impl<'a> CollectProcMacros<'a> {
     fn check_not_pub_in_root(&self, vis: &ast::Visibility, sp: Span) {
+        // Skip validation for watt cdylib crates - they export extern "C" functions
+        if self.is_watt_cdylib {
+            return;
+        }
         if self.is_proc_macro_crate && self.in_root && vis.kind.is_pub() {
             self.dcx.emit_err(errors::ProcMacro { span: sp });
         }
@@ -225,6 +257,42 @@ impl<'a> Visitor<'a> for CollectProcMacros<'a> {
         }
 
         let Some(attr) = found_attr else {
+            // For watt cdylib crates, check for extern "C" functions with watt naming conventions
+            if self.is_watt_cdylib && self.in_root {
+                if let ast::ItemKind::Fn(fn_) = &item.kind {
+                    let fn_ident = fn_.ident;
+                    let fn_name = fn_ident.name.as_str();
+                    
+                    // Check for watt naming patterns: derive_NAME, attr_NAME
+                    if fn_name.starts_with("derive_") {
+                        let trait_name = &fn_name[7..]; // Remove "derive_" prefix
+                        if !trait_name.is_empty() {
+                            // Capitalize first letter for trait name
+                            let trait_name_cap = trait_name.chars().next().unwrap().to_uppercase().to_string() 
+                                + &trait_name[1..];
+                            self.macros.push(ProcMacro::Derive(ProcMacroDerive {
+                                id: item.id,
+                                span: item.span,
+                                trait_name: Symbol::intern(&trait_name_cap),
+                                function_ident: fn_ident,
+                                attrs: ThinVec::new(),
+                            }));
+                            return;
+                        }
+                    } else if fn_name.starts_with("attr_") {
+                        let attr_name = &fn_name[5..]; // Remove "attr_" prefix
+                        if !attr_name.is_empty() {
+                            self.macros.push(ProcMacro::Attr(ProcMacroDef {
+                                id: item.id,
+                                span: item.span,
+                                function_ident: fn_ident,
+                            }));
+                            return;
+                        }
+                    }
+                }
+            }
+            
             self.check_not_pub_in_root(&item.vis, self.source_map.guess_head_span(item.span));
             let prev_in_root = mem::replace(&mut self.in_root, false);
             visit::walk_item(self, item);

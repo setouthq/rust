@@ -60,7 +60,7 @@ use rustc_hir::def::{
     self, CtorOf, DefKind, DocLinkResMap, LifetimeRes, MacroKinds, NonMacroAttrKind, PartialRes,
     PerNS,
 };
-use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, LOCAL_CRATE, LocalDefId, LocalDefIdMap};
+use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, DefIndex, LOCAL_CRATE, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::DisambiguatorState;
 use rustc_hir::{PrimTy, TraitCandidate};
 use rustc_index::bit_set::DenseBitSet;
@@ -1189,11 +1189,11 @@ pub struct Resolver<'ra, 'tcx> {
     local_macro_map: FxHashMap<LocalDefId, &'ra MacroData>,
     /// Storage for WASM proc macros loaded via --wasm-proc-macro
     /// Maps macro name (e.g., "Demo") to MacroData
-    wasm_proc_macros: FxHashMap<Symbol, MacroData>,
+    wasm_proc_macros: CacheRefCell<FxHashMap<Symbol, MacroData>>,
     /// Counter for generating synthetic DefIds for WASM proc macros
-    wasm_proc_macro_def_id_counter: u32,
+    wasm_proc_macro_def_id_counter: CmCell<u32>,
     /// Maps synthetic DefId back to macro name for WASM proc macros
-    wasm_proc_macro_def_id_to_name: FxHashMap<DefId, Symbol>,
+    wasm_proc_macro_def_id_to_name: CacheRefCell<FxHashMap<DefId, Symbol>>,
     /// Lazily populated cache of macro definitions loaded from external crates.
     extern_macro_map: CacheRefCell<FxHashMap<DefId, &'ra MacroData>>,
     dummy_ext_bang: Arc<SyntaxExtension>,
@@ -1635,9 +1635,9 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             registered_tools,
             macro_use_prelude: Default::default(),
             local_macro_map: Default::default(),
-            wasm_proc_macros: FxHashMap::default(),
-            wasm_proc_macro_def_id_counter: 0,
-            wasm_proc_macro_def_id_to_name: FxHashMap::default(),
+            wasm_proc_macros: CacheRefCell::new(FxHashMap::default()),
+            wasm_proc_macro_def_id_counter: CmCell::new(0),
+            wasm_proc_macro_def_id_to_name: CacheRefCell::new(FxHashMap::default()),
             extern_macro_map: Default::default(),
             dummy_ext_bang: Arc::new(SyntaxExtension::dummy_bang(edition)),
             dummy_ext_derive: Arc::new(SyntaxExtension::dummy_derive(edition)),
@@ -1694,7 +1694,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
         // Register WASM proc macros in the resolver
         if !wasm_proc_macros.is_empty() {
-            eprintln!("[RESOLVER] Early registration of {} WASM proc macros", wasm_proc_macros.len());
             resolver.register_wasm_proc_macros(wasm_proc_macros);
         }
 
@@ -1885,18 +1884,18 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
     fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Arc<SyntaxExtension>, DefId)>) {
         let mut crates_seen: FxHashSet<CrateNum> = FxHashSet::default();
         for (name, ext, def_id) in macros {
-            eprintln!("[RESOLVER] Registering WASM proc macro: {} with DefId {:?}", name, def_id);
 
             // Create MacroData from the SyntaxExtension
             let macro_data = MacroData::new(Arc::clone(&ext));
 
             // Store in wasm_proc_macros for name-based lookup during resolution
-            self.wasm_proc_macros.insert(name, macro_data);
+            eprintln!("[INSERT] Inserting {} into wasm_proc_macros (from register_wasm_proc_macros)", name);
+            self.wasm_proc_macros.borrow_mut().insert(name, macro_data);
             let macro_data_ref = self.arenas.alloc_macro(MacroData::new(ext));
             self.extern_macro_map.borrow_mut().insert(def_id, macro_data_ref);
 
             // Store the DefId → name mapping for reverse lookup during resolution
-            self.wasm_proc_macro_def_id_to_name.insert(def_id, name);
+            self.wasm_proc_macro_def_id_to_name.borrow_mut().insert(def_id, name);
             let cnum = def_id.krate;
             if !crates_seen.contains(&cnum) {
                 crates_seen.insert(cnum);
@@ -1905,7 +1904,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 //if let Some(crate_name) = self.cstore().crate_name(cnum) {
                     let crate_name = self.cstore().crate_name(cnum); 
                     let ident = Ident::with_dummy_span(crate_name);
-                    eprintln!("[RESOLVER] Adding {} to extern_prelude", crate_name);
 
                     // Create a binding that points to the crate root module
                     let crate_root = self.expect_module(cnum.as_def_id());
@@ -1926,7 +1924,34 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 //}
             }
 
-            eprintln!("[RESOLVER] Successfully registered WASM proc macro {} with DefId {:?}", name, def_id);
+        }
+    }
+
+    /// Register watt proc-macros for a crate when it is first accessed
+    /// Called from build_reduced_graph_external when processing a watt proc-macro crate
+    fn register_watt_proc_macros_for_crate(&self, cnum: CrateNum) {
+        // Check if already registered - look for any DefId with this crate
+        if self.wasm_proc_macro_def_id_to_name.borrow().iter().any(|(id, _)| id.krate == cnum) {
+            return;
+        }
+        
+        // Try to get watt proc-macros from the crate
+        // Note: We use the original CrateNum but with special DefIndex values
+        // that are recognized as synthetic by the decoder fallback paths
+        if let Some(macros) = self.cstore().get_watt_proc_macros(cnum, self.tcx) {
+            
+            for (name, ext, def_id) in macros.into_iter() {
+                // Use the real DefId from proc_macro_data
+                
+                // Create MacroData from the SyntaxExtension
+                let macro_data = MacroData::new(Arc::clone(&ext));
+                
+                // Store in maps with interior mutability
+                self.wasm_proc_macros.borrow_mut().insert(name, macro_data);
+                let macro_data_ref = self.arenas.alloc_macro(MacroData::new(ext));
+                self.extern_macro_map.borrow_mut().insert(def_id, macro_data_ref);
+                self.wasm_proc_macro_def_id_to_name.borrow_mut().insert(def_id, name);
+            }
         }
     }
 

@@ -431,6 +431,8 @@ top_level_options!(
         /// Directly load WASM proc-macro files (bypasses metadata system)
         /// Format: --wasm-proc-macro Name=path/to/file.wasm
         wasm_proc_macros: Vec<(String, PathBuf)> [UNTRACKED],
+        /// Mark this cdylib as a watt proc-macro crate in metadata
+        watt_cdylib_proc_macro: bool [TRACKED],
         crate_name: Option<String> [TRACKED],
         /// Indicates how the compiler should treat unstable features.
         unstable_features: UnstableFeatures [TRACKED],

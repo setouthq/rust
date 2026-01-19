@@ -240,9 +240,16 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
 
         // Check if this is a WASM proc-macro crate
         let cnum = def_id.krate;
+        
+        // When processing crate root, check if this is a watt proc-macro crate
+        // and register its macros if so
+        if def_id.index == CRATE_DEF_INDEX {
+            self.register_watt_proc_macros_for_crate(cnum);
+        }
+        
         // Check if any wasm_proc_macros belong to this crate
         if def_id.index == CRATE_DEF_INDEX {
-            let macros_in_crate: Vec<_> = self.wasm_proc_macro_def_id_to_name
+            let macros_in_crate: Vec<_> = self.wasm_proc_macro_def_id_to_name.borrow()
                 .iter()
                 .filter(|(id, _)| id.krate == cnum)
                 .map(|(id, name)| (*id, *name))  // Copy the values out

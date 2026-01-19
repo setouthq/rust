@@ -1473,6 +1473,7 @@ impl Default for Options {
             diagnostic_width: None,
             externs: Externs(BTreeMap::new()),
             wasm_proc_macros: Vec::new(),
+            watt_cdylib_proc_macro: false,
             crate_name: None,
             libs: Vec::new(),
             unstable_features: UnstableFeatures::Disallow,
@@ -1838,6 +1839,14 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
             "wasm-proc-macro",
             "Directly load WASM proc-macro files (bypasses metadata system)",
             "NAME=PATH",
+        ),
+        opt(
+            Stable,
+            FlagMulti,
+            "",
+            "watt-cdylib-proc-macro",
+            "Mark this cdylib as a watt proc-macro crate in metadata",
+            "",
         ),
         opt(
             Stable,
@@ -2900,6 +2909,12 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
 
     let externs = parse_externs(early_dcx, matches, &unstable_opts);
     let wasm_proc_macros = parse_wasm_proc_macros(early_dcx, matches, &unstable_opts);
+    let watt_cdylib_proc_macro = matches.opt_present("watt-cdylib-proc-macro");
+    if watt_cdylib_proc_macro {
+        eprintln!("
+=== WATT FLAG DETECTED IN SESSION CONFIG ===
+");
+    }
 
     let remap_path_prefix = parse_remap_path_prefix(early_dcx, matches, &unstable_opts);
 
@@ -2993,6 +3008,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         diagnostic_width,
         externs,
         wasm_proc_macros,
+        watt_cdylib_proc_macro,
         unstable_features,
         crate_name,
         libs,
