@@ -256,7 +256,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                 .collect();
 
             if !macros_in_crate.is_empty() && def_id == cnum.as_def_id() {
-                let crate_name = self.cstore().crate_name(cnum);
 
                 for (i, (macro_def_id, macro_name)) in macros_in_crate.iter().enumerate() {
                     let res = Res::Def(DefKind::Macro(MacroKind::Derive.into()), *macro_def_id);

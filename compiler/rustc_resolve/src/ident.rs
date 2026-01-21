@@ -3,7 +3,7 @@ use Namespace::*;
 use rustc_ast::{self as ast, NodeId};
 use rustc_errors::ErrorGuaranteed;
 use rustc_hir::def::{DefKind, MacroKinds, Namespace, NonMacroAttrKind, PartialRes, PerNS};
-use rustc_middle::{bug, span_bug, ty::Visibility};
+use rustc_middle::{bug, span_bug};
 use rustc_session::lint::builtin::PROC_MACRO_DERIVE_RESOLUTION_FALLBACK;
 use rustc_session::parse::feature_err;
 use rustc_span::hygiene::{ExpnId, ExpnKind, LocalExpnId, MacroKind, SyntaxContext};
@@ -544,9 +544,7 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         }
                     }
                     Scope::MacroUsePrelude => {
-                        // First check WASM proc macros loaded via --wasm-proc-macro
-                        let wasm_count = this.wasm_proc_macros.borrow().len();
-                        let def_id_count = this.wasm_proc_macro_def_id_to_name.borrow().len();
+                        // First check WASM proc macros (watt proc-macro crates)
                         if this.wasm_proc_macros.borrow().contains_key(&ident.name) {
                             // Find the DefId for this macro name by searching the reverse map
                             let def_id = this.wasm_proc_macro_def_id_to_name.borrow()
