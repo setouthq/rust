@@ -60,7 +60,7 @@ use rustc_hir::def::{
     self, CtorOf, DefKind, DocLinkResMap, LifetimeRes, MacroKinds, NonMacroAttrKind, PartialRes,
     PerNS,
 };
-use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, DefIndex, LOCAL_CRATE, LocalDefId, LocalDefIdMap};
+use rustc_hir::def_id::{CRATE_DEF_ID, CrateNum, DefId, LOCAL_CRATE, LocalDefId, LocalDefIdMap};
 use rustc_hir::definitions::DisambiguatorState;
 use rustc_hir::{PrimTy, TraitCandidate};
 use rustc_index::bit_set::DenseBitSet;
@@ -1191,7 +1191,6 @@ pub struct Resolver<'ra, 'tcx> {
     /// Maps macro name (e.g., "Demo") to MacroData
     wasm_proc_macros: CacheRefCell<FxHashMap<Symbol, MacroData>>,
     /// Counter for generating synthetic DefIds for WASM proc macros
-    wasm_proc_macro_def_id_counter: CmCell<u32>,
     /// Maps synthetic DefId back to macro name for WASM proc macros
     wasm_proc_macro_def_id_to_name: CacheRefCell<FxHashMap<DefId, Symbol>>,
     /// Lazily populated cache of macro definitions loaded from external crates.
@@ -1636,7 +1635,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             macro_use_prelude: Default::default(),
             local_macro_map: Default::default(),
             wasm_proc_macros: CacheRefCell::new(FxHashMap::default()),
-            wasm_proc_macro_def_id_counter: CmCell::new(0),
             wasm_proc_macro_def_id_to_name: CacheRefCell::new(FxHashMap::default()),
             extern_macro_map: Default::default(),
             dummy_ext_bang: Arc::new(SyntaxExtension::dummy_bang(edition)),

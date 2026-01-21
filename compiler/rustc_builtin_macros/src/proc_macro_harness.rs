@@ -59,9 +59,6 @@ pub fn inject(
     is_test_crate: bool,
     dcx: DiagCtxtHandle<'_>,
 ) {
-    eprintln!("[HARNESS INJECT] is_proc_macro_crate={}, has_proc_macro_decls={}, watt_cdylib_proc_macro={}",
-              is_proc_macro_crate, has_proc_macro_decls, sess.opts.watt_cdylib_proc_macro);
-    
     let ecfg = ExpansionConfig::default(sym::proc_macro, features);
     let mut cx = ExtCtxt::new(sess, ecfg, resolver, None);
 
@@ -81,14 +78,6 @@ pub fn inject(
         visit::walk_crate(&mut collect, krate);
     }
     let macros = collect.macros;
-    eprintln!("[HARNESS INJECT] After walk_crate: discovered {} macros", macros.len());
-    for m in &macros {
-        match m {
-            ProcMacro::Derive(d) => eprintln!("  - Derive: {}", d.trait_name),
-            ProcMacro::Attr(a) => eprintln!("  - Attr: {:?}", a.id),
-            ProcMacro::Bang(b) => eprintln!("  - Bang: {:?}", b.id),
-        }
-    }
 
     if !is_proc_macro_crate {
         return;
