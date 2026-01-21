@@ -567,157 +567,6 @@ impl CStore {
         }
     }
         
-    /// Load WASM proc macros specified via `--wasm-proc-macro` flags
-    /// Returns a vector of (macro_name, SyntaxExtension) tuples for the resolver to register
-    /// This bypasses the normal metadata/CStore system entirely
-    pub fn load_wasm_proc_macros<'tcx>(&mut self, tcx: TyCtxt<'tcx>) -> Vec<(Symbol, Arc<SyntaxExtension>, DefId)> {
-        // Only compile this code when building rustc for WASM
-        #[cfg(target_family = "wasm")]
-        {
-            use std::fs;
-            use rustc_watt_runtime::WasmMacro;
-            use rustc_span::def_id::DefId;
-
-            let mut result = Vec::new();
-
-            for (file_name, path) in &tcx.sess.opts.wasm_proc_macros {
-                debug!("Loading WASM proc macro: {} from {:?}", file_name, path);
-
-                // Read the WASM file
-                let wasm_bytes = match fs::read(path) {
-                    Ok(bytes) => bytes,
-                    Err(e) => {
-                        tcx.dcx().fatal(format!(
-                            "Failed to read WASM proc macro file {}: {}",
-                            path.display(),
-                            e
-                        ))
-                    }
-                };
-
-                debug!("Read {} bytes from {}", wasm_bytes.len(), path.display());
-
-                // Create WasmMacro instance
-                let wasm_macro = WasmMacro::new_owned(wasm_bytes);
-
-                // Extract proc macros from WASM
-                let proc_macros = create_wasm_proc_macros(wasm_macro);
-
-                debug!("Extracted {} proc macros from WASM file", proc_macros.len());
-
-                // Allocate a CrateNum for this WASM proc macro library
-                // Use a synthetic stable crate ID based on the file name
-                let crate_name_symbol = Symbol::intern(file_name);
-                let stable_crate_id = rustc_span::def_id::StableCrateId::new(
-                    crate_name_symbol,
-                    false, // is_exe
-                    vec![format!("wasm_proc_macro_{}", file_name)], // metadata
-                    env!("CFG_VERSION"), // cfg_version
-                );
-
-                // Allocate the CrateNum
-                let cnum = match tcx.create_crate_num(stable_crate_id) {
-                    Ok(feed) => {
-                        self.metas.push(None); // Reserve slot - will be filled below
-                        feed.key()
-                    }
-                    Err(existing) => {
-                        // If it already exists, use the existing cnum
-                        existing
-                    }
-                };
-
-                debug!("Allocated CrateNum {:?} for WASM proc macro library", cnum);
-
-                // Create stub CrateMetadata for this WASM proc macro crate
-                // This is necessary because other parts of the compiler may try to query
-                // information about this crate (e.g., dependencies during lowering)
-                let stub_metadata = create_wasm_proc_macro_stub_metadata(
-                    tcx.sess,
-                    self,
-                    &proc_macros,
-                    cnum,
-                    crate_name_symbol,
-                    stable_crate_id,
-                    path,
-                );
-                self.set_crate_data(cnum, stub_metadata);
-
-                // Convert ProcMacro to SyntaxExtension before passing to resolver
-                // This avoids needing proc_macro crate dependency in rustc_resolve
-                // Assign sequential DefIndex values starting from 1 (0 is crate root)
-                let proc_macros_vec = proc_macros.into_vec();
-                for (idx, pm) in proc_macros_vec.into_iter().enumerate() {
-                    let (name, kind, helper_attrs) = match pm {
-                        ProcMacro::CustomDerive { trait_name, attributes, client } => {
-                            let helper_attrs = attributes.iter()
-                                .map(|attr| Symbol::intern(attr))
-                                .collect::<Vec<_>>();
-                            (
-                                trait_name,
-                                SyntaxExtensionKind::Derive(Arc::new(rustc_expand::proc_macro::DeriveProcMacro { client })),
-                                helper_attrs,
-                            )
-                        }
-                        ProcMacro::Attr { name, client } => {
-                            (
-                                name,
-                                SyntaxExtensionKind::Attr(Arc::new(rustc_expand::proc_macro::AttrProcMacro { client })),
-                                Vec::new(),
-                            )
-                        }
-                        ProcMacro::Bang { name, client } => {
-                            (
-                                name,
-                                SyntaxExtensionKind::Bang(Arc::new(rustc_expand::proc_macro::BangProcMacro { client })),
-                                Vec::new(),
-                            )
-                        }
-                    };
-
-                    // Create a minimal SyntaxExtension for WASM proc macros
-                    // We use dummy/minimal values since we don't have full metadata
-                    let ext = SyntaxExtension {
-                        kind,
-                        span: DUMMY_SP,
-                        allow_internal_unstable: None,
-                        stability: None,
-                        deprecation: None,
-                        helper_attrs,
-                        edition: Edition::Edition2015,
-                        builtin_name: None,
-                        allow_internal_unsafe: false,
-                        local_inner_macros: false,
-                        collapse_debuginfo: false,
-                    };
-
-                    // Create a DefId using the allocated CrateNum
-                    // Use sequential DefIndex values starting from 1 (0 is reserved for crate root)
-                    let def_id = DefId {
-                        krate: cnum,
-                        index: rustc_span::def_id::DefIndex::from_u32((idx + 1) as u32),
-                    };
-
-                    debug!("About to intern symbol for WASM proc macro: {}", name);
-                    let name_symbol = Symbol::intern(name);
-                    debug!("Symbol interned successfully");
-
-                    result.push((name_symbol, Arc::new(ext), def_id));
-                }
-            }
-
-            result
-        }
-
-        #[cfg(not(target_family = "wasm"))]
-        {
-            // When building rustc for non-WASM platforms, return empty vector
-            // The flag will just be ignored
-            Vec::new()
-        }
-    }
-
-
     fn existing_match(
         &self,
         externs: &Externs,
@@ -877,8 +726,6 @@ impl CStore {
             debug!("Using {} pre-loaded proc macros", pre_loaded.len());
             Some(pre_loaded)
         } else if crate_root.is_proc_macro_crate() || crate_root.is_watt_proc_macro() {
-            eprintln!("[CREADER] Loading proc macros for crate, is_proc_macro_crate={}, is_watt_proc_macro={}",
-                crate_root.is_proc_macro_crate(), crate_root.is_watt_proc_macro());
             // Load proc macros from dylib (or .wasm for watt proc-macros)
             let temp_root;
             let (dlsym_source, dlsym_root) = match &host_lib {
@@ -901,7 +748,6 @@ impl CStore {
             } else {
                 panic!("no dylib, rmeta, or rlib for a proc-macro crate");
             };
-            eprintln!("[CREADER] proc_macro_path={:?}", proc_macro_path);
             Some(self.dlsym_proc_macros(tcx.sess, &proc_macro_path, dlsym_root.stable_crate_id())?)
         } else {
             None
@@ -1220,7 +1066,6 @@ impl CStore {
                 path.with_extension("wasm")
             };
 
-            eprintln!("[DLSYM] Looking for wasm at: {:?}, exists: {}", wasm_path, wasm_path.exists());
             if wasm_path.exists() {
                 return self.dlsym_proc_macros_wasm(&wasm_path, stable_crate_id);
             }
@@ -1678,71 +1523,6 @@ impl CStore {
     }
 }
 
-/// Creates a minimal stub CrateMetadata for WASM proc macro crates
-///
-/// WASM proc macros don't have real .rmeta files, so we need to create
-/// synthetic metadata so that the compiler can handle queries about them.
-#[cfg(target_family = "wasm")]
-fn create_wasm_proc_macro_stub_metadata(
-    sess: &rustc_session::Session,
-    _cstore: &CStore,
-    proc_macros: &[ProcMacro],
-    cnum: CrateNum,
-    crate_name: Symbol,
-    stable_crate_id: StableCrateId,
-    wasm_path: &std::path::Path,
-) -> CrateMetadata {
-    use rustc_data_structures::owned_slice::slice_owned;
-
-    // Create a stub CrateRoot with all empty/default fields using the helper
-    let stub_root = CrateRoot::new_wasm_proc_macro_stub(
-        TargetTuple::from_tuple(&sess.opts.target_triple.tuple()),
-        crate_name,
-        stable_crate_id,
-    );
-
-    // Create a minimal empty blob without full encoding
-    // For WASM proc macros, we don't actually need most of the metadata
-    // since queries won't be made against these crates - we only use raw_proc_macros
-
-    // Create minimal placeholder bytes (make it large enough for any decoder attempts)
-    // Must end with the magic bytes that MemDecoder expects
-    const MAGIC_END_BYTES: &[u8] = b"rust-end-file";
-    let mut dummy_bytes = vec![0u8; 4096 - MAGIC_END_BYTES.len()];
-    dummy_bytes.extend_from_slice(MAGIC_END_BYTES);
-    let owned_slice = slice_owned(dummy_bytes, std::ops::Deref::deref);
-
-    // Create MetadataBlob without validation since we won't decode from it
-    let blob = MetadataBlob::new_unvalidated(owned_slice);
-
-    // Use the stub_root directly
-    let root = stub_root;
-
-    let _macro_def_indices: Vec<DefIndex> = (0..proc_macros.len())
-        .map(|i| DefIndex::from_u32((i + 1) as u32))
-        .collect();
-    // Create minimal CrateSource for the WASM file
-    let source = CrateSource {
-        dylib: Some((wasm_path.to_path_buf(), PathKind::All)),
-        rlib: None,
-        rmeta: None,
-        sdylib_interface: None,
-    };
-
-    // Create CrateMetadata with the stub data using the specialized constructor
-    CrateMetadata::new_wasm_proc_macro_stub(
-        blob,
-        root,
-        Some(Box::leak(proc_macros.to_vec().into_boxed_slice())),
-        cnum,
-        CrateNumMap::new(),
-        CrateDepKind::MacrosOnly,
-        source,
-        stable_crate_id,
-        proc_macros.len(),
-    )
-}
-
 fn fn_spans(krate: &ast::Crate, name: Symbol) -> Vec<Span> {
     struct Finder {
         name: Symbol,
@@ -1852,48 +1632,6 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
 ///
 /// This function extracts proc macro metadata from the WASM module and creates
 /// the appropriate ProcMacro enum variants that bridge to the watt runtime.
-// =============================================================================
-// WASM PROC-MACRO ARCHITECTURE
-// =============================================================================
-//
-// This module implements support for running procedural macros compiled to WASM
-// (WebAssembly) instead of native dylibs. This is essential for running rustc
-// itself as a WASM module (e.g., in wargo).
-//
-// ## How Native Proc-Macros Work
-//
-// Native proc-macros are compiled to dylibs with embedded .rmeta metadata.
-// rustc loads them via dlopen/dlsym, reading their metadata and calling their
-// exported functions directly.
-//
-// ## How WASM Proc-Macros Work
-//
-// WASM proc-macros are .wasm files interpreted by the `rustc_watt_runtime` crate.
-// Since we cannot dlopen a WASM file, we:
-//
-// 1. **Create synthetic metadata stubs**: Instead of reading .rmeta from the
-//    WASM file, we construct minimal `CrateRoot` and `CrateMetadata` structs
-//    with empty tables. The decoder has fallback logic for proc-macro crates
-//    with empty tables (returns defaults like DUMMY_SP, Visibility::Public).
-//
-// 2. **Pre-load proc-macros**: The actual `ProcMacro` instances are created
-//    from the WASM module and stored in `CrateMetadata.raw_proc_macros`.
-//    This bypasses the normal dlsym-based loading entirely.
-//
-// 3. **Use slot functions for dispatch**: The proc_macro bridge requires
-//    `fn` pointers (not closures) because of `Copy + ZST` constraints.
-//    We use const-generic functions (`slot_derive::<N>`) that look up the
-//    actual WASM macro from a global slot registry at runtime.
-//
-// ## Key Components
-//
-// - `create_wasm_proc_macros()`: Creates `ProcMacro` instances from WASM
-// - `create_wasm_proc_macro_stub_metadata()`: Creates synthetic CrateMetadata
-// - `CrateRoot::new_wasm_proc_macro_stub()`: Creates minimal CrateRoot
-// - `slot_derive/attr/bang::<N>()`: Const-generic dispatch functions
-// - `make_derive/attr/bang_client()`: Maps slot indices to Client instances
-//
-// =============================================================================
 
 #[cfg(target_family = "wasm")]
 fn create_wasm_proc_macros(

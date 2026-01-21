@@ -727,7 +727,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     is_stub: false,
                     is_watt_proc_macro: {
                         let flag = tcx.sess.opts.watt_cdylib_proc_macro;
-                        eprintln!("[ENCODER] Setting is_watt_proc_macro={} in CrateHeader", flag);
                         flag
                     },
                 },
@@ -1930,13 +1929,6 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
         let is_watt_cdylib = self.tcx.sess.opts.watt_cdylib_proc_macro;
         let is_proc_macro = self.tcx.crate_types().contains(&CrateType::ProcMacro)
             || is_watt_cdylib;
-        eprintln!("
-
-
-=== ENCODER DEBUG: is_watt_cdylib={}, is_proc_macro={} ===
-
-
-", is_watt_cdylib, is_proc_macro);
         if is_proc_macro {
             let tcx = self.tcx;
             // For watt cdylib crates, proc_macro_decls_static doesn't exist (we skip mk_decls)
@@ -2398,9 +2390,6 @@ impl<D: Decoder> Decodable<D> for EncodedMetadata {
 
 #[instrument(level = "trace", skip(tcx))]
 pub fn encode_metadata(tcx: TyCtxt<'_>, path: &Path, ref_path: Option<&Path>) {
-    eprintln!("
-=== ENCODE_METADATA CALLED: watt_flag={} ===
-", tcx.sess.opts.watt_cdylib_proc_macro);
     // Since encoding metadata is not in a query, and nothing is cached,
     // there's no need to do dep-graph tracking for any of it.
     tcx.dep_graph.assert_ignored();

@@ -547,22 +547,13 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         // First check WASM proc macros loaded via --wasm-proc-macro
                         let wasm_count = this.wasm_proc_macros.borrow().len();
                         let def_id_count = this.wasm_proc_macro_def_id_to_name.borrow().len();
-                        if wasm_count > 0 {
-                            eprintln!("[RESOLVER] wasm_proc_macros has {} entries, def_id_to_name has {} entries", wasm_count, def_id_count);
-                            eprintln!("[RESOLVER] wasm_proc_macros keys: {:?}", this.wasm_proc_macros.borrow().keys().collect::<Vec<_>>());
-                            eprintln!("[RESOLVER] def_id_to_name: {:?}", this.wasm_proc_macro_def_id_to_name.borrow().iter().collect::<Vec<_>>());
-                        }
                         if this.wasm_proc_macros.borrow().contains_key(&ident.name) {
-                            eprintln!("[RESOLVER] Found WASM proc macro: {}", ident.name);
-
                             // Find the DefId for this macro name by searching the reverse map
                             let def_id = this.wasm_proc_macro_def_id_to_name.borrow()
                                 .iter()
                                 .find(|(_, name)| **name == ident.name)
                                 .map(|(def_id, _)| *def_id)
                                 .expect("WASM proc macro should have a DefId mapping");
-
-                            eprintln!("[RESOLVER] Using DefId {:?} for WASM proc macro {}", def_id, ident.name);
 
                             // Create a NameBinding with the unique DefId
                             let res = Res::Def(DefKind::Macro(MacroKind::Derive.into()), def_id);

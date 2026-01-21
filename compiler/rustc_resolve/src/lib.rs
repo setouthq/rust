@@ -1187,7 +1187,7 @@ pub struct Resolver<'ra, 'tcx> {
     macro_use_prelude: FxIndexMap<Symbol, NameBinding<'ra>>,
     /// Eagerly populated map of all local macro definitions.
     local_macro_map: FxHashMap<LocalDefId, &'ra MacroData>,
-    /// Storage for WASM proc macros loaded via --wasm-proc-macro
+    /// Storage for WASM proc macros (watt proc-macro crates)
     /// Maps macro name (e.g., "Demo") to MacroData
     wasm_proc_macros: CacheRefCell<FxHashMap<Symbol, MacroData>>,
     /// Counter for generating synthetic DefIds for WASM proc macros
@@ -1686,16 +1686,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         let root_parent_scope = ParentScope::module(graph_root, resolver.arenas);
         resolver.invocation_parent_scopes.insert(LocalExpnId::ROOT, root_parent_scope);
         resolver.feed_visibility(crate_feed, Visibility::Public);
-        // Load WASM proc macros specified via --wasm-proc-macro flags
-        // This must happen during resolver construction, before macro expansion starts
-        let wasm_proc_macros = resolver.tcx.sess.time("load_wasm_proc_macros_early", || {
-            resolver.cstore_mut().load_wasm_proc_macros(resolver.tcx)
-        });
-
-        // Register WASM proc macros in the resolver
-        if !wasm_proc_macros.is_empty() {
-            resolver.register_wasm_proc_macros(wasm_proc_macros);
-        }
 
         resolver
     }
@@ -1879,53 +1869,6 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         }
     }
 
-    /// Register WASM proc macros loaded via `--wasm-proc-macro` flags
-    /// This stores them in the `wasm_proc_macros` map and creates synthetic DefIds for lookup
-    fn register_wasm_proc_macros(&mut self, macros: Vec<(Symbol, Arc<SyntaxExtension>, DefId)>) {
-        let mut crates_seen: FxHashSet<CrateNum> = FxHashSet::default();
-        for (name, ext, def_id) in macros {
-
-            // Create MacroData from the SyntaxExtension
-            let macro_data = MacroData::new(Arc::clone(&ext));
-
-            // Store in wasm_proc_macros for name-based lookup during resolution
-            eprintln!("[INSERT] Inserting {} into wasm_proc_macros (from register_wasm_proc_macros)", name);
-            self.wasm_proc_macros.borrow_mut().insert(name, macro_data);
-            let macro_data_ref = self.arenas.alloc_macro(MacroData::new(ext));
-            self.extern_macro_map.borrow_mut().insert(def_id, macro_data_ref);
-
-            // Store the DefId → name mapping for reverse lookup during resolution
-            self.wasm_proc_macro_def_id_to_name.borrow_mut().insert(def_id, name);
-            let cnum = def_id.krate;
-            if !crates_seen.contains(&cnum) {
-                crates_seen.insert(cnum);
-
-                // Get the crate name from cstore
-                //if let Some(crate_name) = self.cstore().crate_name(cnum) {
-                    let crate_name = self.cstore().crate_name(cnum); 
-                    let ident = Ident::with_dummy_span(crate_name);
-
-                    // Create a binding that points to the crate root module
-                    let crate_root = self.expect_module(cnum.as_def_id());
-                    let vis = ty::Visibility::<DefId>::Public;
-                    let binding = self.arenas.alloc_name_binding(NameBindingData {
-                        kind: NameBindingKind::Res(Res::Def(DefKind::Mod, crate_root.def_id())),
-                        ambiguity: None,
-                        warn_ambiguity: false,
-                        expansion: LocalExpnId::ROOT,
-                        span: DUMMY_SP,
-                        vis: ty::Visibility::Public,
-                    });
-
-                    self.extern_prelude.insert(Macros20NormalizedIdent::new(ident), ExternPreludeEntry {
-                        item_binding: Some((binding, false)),
-                        flag_binding: None,
-                    });
-                //}
-            }
-
-        }
-    }
 
     /// Register watt proc-macros for a crate when it is first accessed
     /// Called from build_reduced_graph_external when processing a watt proc-macro crate

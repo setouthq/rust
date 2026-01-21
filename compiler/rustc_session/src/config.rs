@@ -1472,7 +1472,6 @@ impl Default for Options {
             error_format: ErrorOutputType::default(),
             diagnostic_width: None,
             externs: Externs(BTreeMap::new()),
-            wasm_proc_macros: Vec::new(),
             watt_cdylib_proc_macro: false,
             crate_name: None,
             libs: Vec::new(),
@@ -1832,14 +1831,6 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
 
     let mut options = vec![
         opt(Stable, Flag, "h", "help", "Display this message", ""),
-        opt(
-            Stable,
-            Multi,
-            "",
-            "wasm-proc-macro",
-            "Directly load WASM proc-macro files (bypasses metadata system)",
-            "NAME=PATH",
-        ),
         opt(
             Stable,
             FlagMulti,
@@ -2580,51 +2571,6 @@ pub fn parse_externs(
     Externs(externs)
 }
 
-pub fn parse_wasm_proc_macros(
-    early_dcx: &EarlyDiagCtxt,
-    matches: &getopts::Matches,
-    _unstable_opts: &UnstableOptions,
-) -> Vec<(String, PathBuf)> {
-    let mut wasm_proc_macros = Vec::new();
-    for arg in matches.opt_strs("wasm-proc-macro") {
-        let Some((name, path)) = arg.split_once('=') else {
-            early_dcx.early_fatal(format!(
-                "`--wasm-proc-macro` requires NAME=PATH format, got: {arg}"
-            ));
-        };
-
-        // Validate name is a valid ASCII identifier
-        let is_valid_ident = {
-            let mut chars = name.chars();
-            if let Some(start) = chars.next()
-                && (start.is_ascii_alphabetic() || start == '_')
-            {
-                chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-            } else {
-                false
-            }
-        };
-
-        if !is_valid_ident {
-            early_dcx.early_fatal(format!(
-                "proc macro name `{name}` passed to `--wasm-proc-macro` is not a valid ASCII identifier"
-            ));
-        }
-
-        let path = PathBuf::from(path);
-        if !path.exists() {
-            early_dcx.early_fatal(format!(
-                "WASM proc macro file does not exist: {}",
-                path.display()
-            ));
-        }
-
-        wasm_proc_macros.push((name.to_string(), path));
-    }
-
-    wasm_proc_macros
-}
-
 fn parse_remap_path_prefix(
     early_dcx: &EarlyDiagCtxt,
     matches: &getopts::Matches,
@@ -2908,7 +2854,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     }
 
     let externs = parse_externs(early_dcx, matches, &unstable_opts);
-    let wasm_proc_macros = parse_wasm_proc_macros(early_dcx, matches, &unstable_opts);
     let watt_cdylib_proc_macro = matches.opt_present("watt-cdylib-proc-macro");
     if watt_cdylib_proc_macro {
         eprintln!("
@@ -3007,7 +2952,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         error_format,
         diagnostic_width,
         externs,
-        wasm_proc_macros,
         watt_cdylib_proc_macro,
         unstable_features,
         crate_name,

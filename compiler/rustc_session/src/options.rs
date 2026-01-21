@@ -428,9 +428,6 @@ top_level_options!(
         prints: Vec<PrintRequest> [UNTRACKED],
         cg: CodegenOptions [SUBSTRUCT CodegenOptionsTargetModifiers CodegenOptions],
         externs: Externs [UNTRACKED],
-        /// Directly load WASM proc-macro files (bypasses metadata system)
-        /// Format: --wasm-proc-macro Name=path/to/file.wasm
-        wasm_proc_macros: Vec<(String, PathBuf)> [UNTRACKED],
         /// Mark this cdylib as a watt proc-macro crate in metadata
         watt_cdylib_proc_macro: bool [TRACKED],
         crate_name: Option<String> [TRACKED],
