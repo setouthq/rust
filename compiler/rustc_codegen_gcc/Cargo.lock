@@ -391,3 +391,8 @@ checksum = "6f42320e61fe2cfd34354ecb597f86f413484a798ba44a8ca1165c58d42da6c1"
 dependencies = [
  "bitflags",
 ]
+
+[[patch.unused]]
+name = "synstructure"
+version = "0.13.2"
+source = "git+https://github.com/macovedj/synstructure#cf719efe5d0249ee599823f0c723e0f852b62369"

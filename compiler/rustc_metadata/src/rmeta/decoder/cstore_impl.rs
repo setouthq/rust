@@ -557,7 +557,7 @@ impl CStore {
         let _prof_timer = sess.prof.generic_activity("metadata_load_macro");
 
         let data = self.get_crate_data(id.krate);
-        if data.root.is_proc_macro_crate() {
+        if data.root.is_proc_macro_crate() || data.root.is_watt_proc_macro() {
             LoadedMacro::ProcMacro(data.load_proc_macro(id.index, tcx))
         } else {
             LoadedMacro::MacroDef {

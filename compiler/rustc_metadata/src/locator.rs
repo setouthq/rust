@@ -619,7 +619,6 @@ impl<'a> CrateLocator<'a> {
                     if let Some(h) = self.crate_matches(crate_rejections, &blob, &lib) {
                         (h, blob)
                     } else {
-                        info!("metadata mismatch");
                         continue;
                     }
                 }
@@ -627,17 +626,12 @@ impl<'a> CrateLocator<'a> {
                     // The file was present and created by the same compiler version, but we
                     // couldn't load it for some reason. Give a hard error instead of silently
                     // ignoring it, but only if we would have given an error anyway.
-                    info!(
-                        "Rejecting via version: expected {} got {}",
-                        expected_version, found_version
-                    );
                     crate_rejections
                         .via_version
                         .push(CrateMismatch { path: lib, got: found_version });
                     continue;
                 }
                 Err(MetadataError::LoadFailure(err)) => {
-                    info!("no metadata found: {}", err);
                     // Metadata was loaded from interface file earlier.
                     if let Some((.., CrateFlavor::SDylib)) = slot {
                         ret = Some((lib, kind));
@@ -650,7 +644,6 @@ impl<'a> CrateLocator<'a> {
                     continue;
                 }
                 Err(err @ MetadataError::NotPresent(_)) => {
-                    info!("no metadata found: {}", err);
                     continue;
                 }
             };
@@ -732,10 +725,6 @@ impl<'a> CrateLocator<'a> {
     ) -> Option<Svh> {
         let header = metadata.get_header();
         if header.is_proc_macro_crate != self.is_proc_macro {
-            info!(
-                "Rejecting via proc macro: expected {} got {}",
-                self.is_proc_macro, header.is_proc_macro_crate,
-            );
             return None;
         }
 
@@ -744,8 +733,8 @@ impl<'a> CrateLocator<'a> {
             return None;
         }
 
-        if header.triple != self.tuple {
-            info!("Rejecting via crate triple: expected {} got {}", self.tuple, header.triple);
+        // Skip triple check for watt proc-macros - WASM is portable across targets
+        if header.triple != self.tuple && !header.is_watt_proc_macro {
             crate_rejections.via_triple.push(CrateMismatch {
                 path: libpath.to_path_buf(),
                 got: header.triple.to_string(),
@@ -821,8 +810,9 @@ impl<'a> CrateLocator<'a> {
         }
 
         // Extract the dylib/rlib/rmeta triple.
-        self.extract_lib(crate_rejections, rlibs, rmetas, dylibs, sdylib_interfaces)
-            .map(|opt| opt.map(|(_, lib)| lib))
+        let result = self.extract_lib(crate_rejections, rlibs, rmetas, dylibs, sdylib_interfaces)
+            .map(|opt| opt.map(|(_, lib)| lib));
+        result
     }
 
     pub(crate) fn into_error(

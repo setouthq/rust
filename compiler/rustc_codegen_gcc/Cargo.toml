@@ -54,3 +54,7 @@ debug = false
 
 [package.metadata.rust-analyzer]
 rustc_private = true
+
+[patch.crates-io]
+synstructure = { git = "https://github.com/macovedj/synstructure" }
+

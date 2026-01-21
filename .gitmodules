@@ -47,3 +47,7 @@
 	path = src/gcc
 	url = https://github.com/rust-lang/gcc.git
 	shallow = true
+[submodule "compiler/rustc_watt_runtime"]
+	path = compiler/rustc_watt_runtime
+	url = https://github.com/macovedj/watt.git
+	branch = rustc-wasm

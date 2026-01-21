@@ -1472,6 +1472,7 @@ impl Default for Options {
             error_format: ErrorOutputType::default(),
             diagnostic_width: None,
             externs: Externs(BTreeMap::new()),
+            watt_cdylib_proc_macro: false,
             crate_name: None,
             libs: Vec::new(),
             unstable_features: UnstableFeatures::Disallow,
@@ -1830,6 +1831,14 @@ pub fn rustc_optgroups() -> Vec<RustcOptGroup> {
 
     let mut options = vec![
         opt(Stable, Flag, "h", "help", "Display this message", ""),
+        opt(
+            Stable,
+            FlagMulti,
+            "",
+            "watt-cdylib-proc-macro",
+            "Mark this cdylib as a watt proc-macro crate in metadata",
+            "",
+        ),
         opt(
             Stable,
             Multi,
@@ -2845,6 +2854,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
     }
 
     let externs = parse_externs(early_dcx, matches, &unstable_opts);
+    let watt_cdylib_proc_macro = matches.opt_present("watt-cdylib-proc-macro");
 
     let remap_path_prefix = parse_remap_path_prefix(early_dcx, matches, &unstable_opts);
 
@@ -2937,6 +2947,7 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
         error_format,
         diagnostic_width,
         externs,
+        watt_cdylib_proc_macro,
         unstable_features,
         crate_name,
         libs,

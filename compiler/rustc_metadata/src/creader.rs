@@ -5,8 +5,10 @@ use std::error::Error;
 
 use std::path::Path;
 use std::str::FromStr;
-use std::time::Duration;
+use std::num::NonZero;
 use std::{cmp, env, iter};
+use rustc_target::spec::TargetTuple;
+use rustc_proc_macro::bridge::client::ProcMacro;
 
 use rustc_ast::expand::allocator::{ALLOC_ERROR_HANDLER, AllocatorKind, global_fn_name};
 use rustc_ast::{self as ast, *};
@@ -14,20 +16,21 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_data_structures::owned_slice::OwnedSlice;
 use rustc_data_structures::svh::Svh;
 use rustc_data_structures::sync::{self, FreezeReadGuard, FreezeWriteGuard};
+use std::sync::Arc;
 use rustc_data_structures::unord::UnordMap;
-use rustc_expand::base::SyntaxExtension;
+use rustc_expand::base::{SyntaxExtension, SyntaxExtensionKind};
 
 #[cfg(any(unix, windows))]
 use rustc_fs_util::try_canonicalize;
 
 use rustc_hir as hir;
-use rustc_hir::def_id::{CrateNum, LOCAL_CRATE, LocalDefId, StableCrateId};
+use rustc_hir::def_id::{CrateNum, DefId, DefIndex, LOCAL_CRATE, LocalDefId, StableCrateId};
 use rustc_hir::definitions::Definitions;
 use rustc_index::IndexVec;
 use rustc_middle::bug;
 use rustc_middle::ty::data_structures::IndexSet;
 use rustc_middle::ty::{TyCtxt, TyCtxtFeed};
-use rustc_proc_macro::bridge::client::ProcMacro;
+//use rustc_proc_macro::bridge::client::ProcMacro;
 use rustc_session::Session;
 use rustc_session::config::{
     CrateType, ExtendedTargetModifierInfo, ExternLocation, Externs, OptionsTargetModifiers,
@@ -37,7 +40,6 @@ use rustc_session::cstore::{CrateDepKind, CrateSource, ExternCrate, ExternCrateS
 use rustc_session::lint::{self, BuiltinLintDiag};
 use rustc_session::output::validate_crate_name;
 use rustc_session::search_paths::PathKind;
-use rustc_span::def_id::DefId;
 use rustc_span::edition::Edition;
 use rustc_span::{DUMMY_SP, Ident, Span, Symbol, sym};
 use rustc_target::spec::{PanicStrategy, Target};
@@ -285,6 +287,52 @@ impl CStore {
         self.iter_crate_data().flat_map(|(krate, data)| data.proc_macros_for_crate(krate, self))
     }
 
+    /// Get watt proc-macros for a crate, if it is a watt proc-macro crate
+    /// Returns None if the crate is not a watt proc-macro crate
+    pub fn get_watt_proc_macros<'tcx>(
+        &self,
+        cnum: CrateNum,
+        tcx: TyCtxt<'tcx>,
+    ) -> Option<Vec<(Symbol, Arc<rustc_expand::base::SyntaxExtension>, DefId)>> {
+        use rustc_span::Symbol;
+        use std::sync::Arc;
+        let crate_data = self.get_crate_data(cnum);
+        // CrateMetadataRef derefs to CrateMetadata, so we can call is_watt_proc_macro
+        if !crate_data.is_watt_proc_macro() {
+            return None;
+        }
+        
+        // Get raw_proc_macros and convert to SyntaxExtensions
+        let raw_macros = match crate_data.raw_proc_macros() {
+            Some(m) => {
+                m
+            }
+            None => {
+                return None;
+            }
+        };
+        
+        // Get the actual DefIndex values from proc_macro_data.macros
+        let proc_macro_indices: Vec<DefIndex> = crate_data.proc_macro_def_indices(self);
+        
+        let mut result = Vec::new();
+        for (i, pm) in raw_macros.iter().enumerate() {
+            // Use actual DefIndex from proc_macro_data if available, otherwise synthetic
+            let def_index = proc_macro_indices.get(i).copied()
+                .unwrap_or_else(|| DefIndex::from_u32((i + 1) as u32));
+            let ext = crate_data.load_proc_macro(def_index, tcx);
+            let name = match pm {
+                rustc_proc_macro::bridge::client::ProcMacro::CustomDerive { trait_name, .. } => Symbol::intern(trait_name),
+                rustc_proc_macro::bridge::client::ProcMacro::Attr { name, .. } => Symbol::intern(name),
+                rustc_proc_macro::bridge::client::ProcMacro::Bang { name, .. } => Symbol::intern(name),
+            };
+            let def_id = DefId { krate: cnum, index: def_index };
+            result.push((name, Arc::new(ext), def_id));
+        }
+        Some(result)
+    }
+
+
     fn push_dependencies_in_postorder(&self, deps: &mut IndexSet<CrateNum>, cnum: CrateNum) {
         if !deps.contains(&cnum) {
             let data = self.get_crate_data(cnum);
@@ -469,7 +517,7 @@ impl CStore {
         }
         let mods = tcx.sess.opts.gather_target_modifiers();
         for (_cnum, data) in self.iter_crate_data() {
-            if data.is_proc_macro_crate() {
+            if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                 continue;
             }
             let dep_mods = data.target_modifiers();
@@ -485,7 +533,7 @@ impl CStore {
             return;
         }
         for (_cnum, data) in self.iter_crate_data() {
-            if data.is_proc_macro_crate() {
+            if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                 continue;
             }
             if data.has_async_drops() {
@@ -518,7 +566,7 @@ impl CStore {
             used_extern_options: Default::default(),
         }
     }
-
+        
     fn existing_match(
         &self,
         externs: &Externs,
@@ -632,6 +680,7 @@ impl CStore {
         dep_kind: CrateDepKind,
         name: Symbol,
         private_dep: Option<bool>,
+        pre_loaded_proc_macros: Option<&'static [ProcMacro]>,
     ) -> Result<CrateNum, CrateError> {
         let _prof_timer =
             tcx.sess.prof.generic_activity_with_arg("metadata_register_crate", name.as_str());
@@ -672,7 +721,12 @@ impl CStore {
             private_dep,
         )?;
 
-        let raw_proc_macros = if crate_root.is_proc_macro_crate() {
+        let raw_proc_macros = if let Some(pre_loaded) = pre_loaded_proc_macros {
+            // Use pre-loaded proc macros (e.g., from WASM)
+            debug!("Using {} pre-loaded proc macros", pre_loaded.len());
+            Some(pre_loaded)
+        } else if crate_root.is_proc_macro_crate() || crate_root.is_watt_proc_macro() {
+            // Load proc macros from dylib (or .wasm for watt proc-macros)
             let temp_root;
             let (dlsym_source, dlsym_root) = match &host_lib {
                 Some(host_lib) => (&host_lib.source, {
@@ -681,8 +735,20 @@ impl CStore {
                 }),
                 None => (&source, &crate_root),
             };
-            let dlsym_dylib = dlsym_source.dylib.as_ref().expect("no dylib for a proc-macro crate");
-            Some(self.dlsym_proc_macros(tcx.sess, &dlsym_dylib.0, dlsym_root.stable_crate_id())?)
+            // For proc-macro crates, we need to find the executable.
+            // Prefer dylib, but fall back to rmeta (which can have .wasm next to it on WASM targets)
+            let proc_macro_path = if let Some((dylib_path, _)) = &dlsym_source.dylib {
+                dylib_path.clone()
+            } else if let Some((rmeta_path, _)) = &dlsym_source.rmeta {
+                // On WASM targets, dlsym_proc_macros will look for .wasm next to .rmeta
+                rmeta_path.clone()
+            } else if let Some((rlib_path, _)) = &dlsym_source.rlib {
+                // Try rlib as fallback
+                rlib_path.clone()
+            } else {
+                panic!("no dylib, rmeta, or rlib for a proc-macro crate");
+            };
+            Some(self.dlsym_proc_macros(tcx.sess, &proc_macro_path, dlsym_root.stable_crate_id())?)
         } else {
             None
         };
@@ -843,7 +909,9 @@ impl CStore {
             let mut crate_rejections = CrateRejections::default();
 
             match self.load(&mut locator, &mut crate_rejections)? {
-                Some(res) => (res, None),
+                Some(res) => {
+                    (res, None)
+                },
                 None => {
                     info!("falling back to loading proc_macro");
                     dep_kind = CrateDepKind::MacrosOnly;
@@ -854,8 +922,12 @@ impl CStore {
                         path_kind,
                         host_hash,
                     )? {
-                        Some(res) => res,
-                        None => return Err(locator.into_error(crate_rejections, dep_root.cloned())),
+                        Some(res) => {
+                            res
+                        },
+                        None => {
+                            return Err(locator.into_error(crate_rejections, dep_root.cloned()))
+                        },
                     }
                 }
             }
@@ -871,7 +943,7 @@ impl CStore {
                 let private_dep =
                     self.is_private_dep(&tcx.sess.opts.externs, name, private_dep, origin);
                 let data = self.get_crate_data_mut(cnum);
-                if data.is_proc_macro_crate() {
+                if data.is_proc_macro_crate() || data.is_watt_proc_macro() {
                     dep_kind = CrateDepKind::MacrosOnly;
                 }
                 data.set_dep_kind(cmp::max(data.dep_kind(), dep_kind));
@@ -880,7 +952,7 @@ impl CStore {
             }
             (LoadResult::Loaded(library), host_library) => {
                 info!("register newly loaded library for `{}`", name);
-                self.register_crate(tcx, host_library, origin, library, dep_kind, name, private_dep)
+                self.register_crate(tcx, host_library, origin, library, dep_kind, name, private_dep, None)
             }
             _ => panic!(),
         }
@@ -974,6 +1046,32 @@ impl CStore {
         path: &Path,
         stable_crate_id: StableCrateId,
     ) -> Result<&'static [ProcMacro], CrateError> {
+        // If path is .rmeta, look for corresponding .wasm
+        // Note: rmeta files have lib prefix (libfoo.rmeta) but wasm files do not (foo.wasm)
+        #[cfg(target_family = "wasm")]
+        {
+            let wasm_path = if path.extension().and_then(|s| s.to_str()) == Some("rmeta") {
+                // Strip lib prefix: libfoo.rmeta -> foo.wasm
+                let parent = path.parent().unwrap_or(std::path::Path::new("."));
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                let wasm_name = if stem.starts_with("lib") {
+                    format!("{}.wasm", &stem[3..])
+                } else {
+                    format!("{}.wasm", stem)
+                };
+                parent.join(wasm_name)
+            } else if path.extension().and_then(|s| s.to_str()) == Some("wasm") {
+                path.to_path_buf()
+            } else {
+                path.with_extension("wasm")
+            };
+
+            if wasm_path.exists() {
+                return self.dlsym_proc_macros_wasm(&wasm_path, stable_crate_id);
+            }
+        }
+
+        // Otherwise use native dylib loading
         let sym_name = sess.generate_proc_macro_decls_symbol(stable_crate_id);
         debug!("trying to dlsym proc_macros {} for symbol `{}`", path.display(), sym_name);
 
@@ -994,6 +1092,39 @@ impl CStore {
                 }
             }
         }
+    }
+
+    #[cfg(target_family = "wasm")]
+    fn dlsym_proc_macros_wasm(
+        &self,
+        path: &Path,
+        _stable_crate_id: StableCrateId,
+    ) -> Result<&'static [ProcMacro], CrateError> {
+        trace!("dlsym_proc_macros_wasm called for: {:?}", path);
+        use rustc_watt_runtime::WasmMacro;
+        use std::fs;
+
+        debug!("loading WASM proc_macros from {}", path.display());
+
+        // Read the .wasm file
+        let wasm_bytes = fs::read(path).map_err(|err| {
+            CrateError::DlOpen(
+                path.display().to_string(),
+                format!("failed to read WASM file: {}", err),
+            )
+        })?;
+
+        // Create WasmMacro instance
+        let wasm_macro = WasmMacro::new_owned(wasm_bytes);
+
+        // For now, create a simple test proc macro
+        // TODO: Extract actual proc macro metadata from WASM module
+        // This will be implemented in Phase 1.3
+        let proc_macros = create_wasm_proc_macros(wasm_macro);
+
+        debug!("loaded {} WASM proc_macros from {}", proc_macros.len(), path.display());
+
+        Ok(Box::leak(proc_macros))
     }
 
     fn inject_panic_runtime(&mut self, tcx: TyCtxt<'_>, krate: &ast::Crate) {
@@ -1302,7 +1433,7 @@ impl CStore {
             // Make a point span rather than covering the whole file
             let span = krate.spans.inner_span.shrink_to_lo();
 
-            tcx.sess.dcx().emit_err(errors::WasmCAbi { span });
+            tcx.dcx().emit_err(errors::WasmCAbi { span });
         }
     }
 
@@ -1480,7 +1611,7 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
                 }
 
                 last_error = Some(err);
-                std::thread::sleep(Duration::from_millis(100));
+                std::thread::sleep(std::time::Duration::from_millis(100));
                 debug!("Failed to load proc-macro `{}`. Retrying.", path.display());
             }
         }
@@ -1497,6 +1628,201 @@ fn load_dylib(path: &Path, max_attempts: usize) -> Result<libloading::Library, S
     Err(message)
 }
 
+/// Helper function to create ProcMacro instances from a WASM module
+///
+/// This function extracts proc macro metadata from the WASM module and creates
+/// the appropriate ProcMacro enum variants that bridge to the watt runtime.
+
+#[cfg(target_family = "wasm")]
+fn create_wasm_proc_macros(
+    wasm_macro: rustc_watt_runtime::WasmMacro,
+) -> Box<[ProcMacro]> {
+    trace!("create_wasm_proc_macros called");
+    use rustc_proc_macro::bridge::client::{Client, ProcMacro};
+    use rustc_proc_macro::TokenStream;
+    use rustc_watt_runtime::metadata::{ProcMacroMetadata, extract_proc_macro_metadata};
+    use std::sync::{Mutex, OnceLock};
+
+    // Slot-based registry for WASM proc macros
+    // This allows us to use zero-sized function items instead of closures
+    #[derive(Copy, Clone)]
+    struct SlotData {
+        wasm_macro: &'static rustc_watt_runtime::WasmMacro,
+        function_name: &'static str,
+        slot_type: SlotType,
+    }
+
+    #[derive(Copy, Clone)]
+    enum SlotType {
+        Derive,
+        Attr,
+        Bang,
+    }
+
+    static SLOTS: OnceLock<Mutex<Vec<Option<SlotData>>>> = OnceLock::new();
+
+    fn get_slots() -> &'static Mutex<Vec<Option<SlotData>>> {
+        SLOTS.get_or_init(|| Mutex::new(vec![None; 256]))
+    }
+
+    fn allocate_slot(data: SlotData) -> usize {
+        let mut slots = get_slots().lock().unwrap();
+        for (i, slot) in slots.iter_mut().enumerate() {
+            if slot.is_none() {
+                *slot = Some(data);
+                return i;
+            }
+        }
+        panic!("Ran out of proc macro slots (max 256)");
+    }
+
+    // ==================== MACRO-GENERATED SLOT FUNCTIONS ====================
+    // 
+    // These slot functions bridge between rustc's proc-macro infrastructure
+    // (which requires static function pointers) and the watt runtime (which
+    // needs dynamic dispatch to WASM modules).
+    //
+    // The Client::expand1/expand2 functions require `Fn(...) + Copy` closures,
+    // which effectively means zero-sized types. Closures that capture data
+    // (like a slot index) are not ZST, so we use const generics instead:
+    // each `slot_derive::<N>` is a distinct ZST function item.
+    
+    fn slot_derive<const N: usize>(input: TokenStream) -> TokenStream {
+        let slots = get_slots().lock().unwrap();
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
+        data.wasm_macro.proc_macro_derive(data.function_name, input)
+    }
+
+    fn slot_attr<const N: usize>(args: TokenStream, input: TokenStream) -> TokenStream {
+        let slots = get_slots().lock().unwrap();
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
+        data.wasm_macro.proc_macro_attribute(data.function_name, args, input)
+    }
+
+    fn slot_bang<const N: usize>(input: TokenStream) -> TokenStream {
+        let slots = get_slots().lock().unwrap();
+        let data = slots[N].as_ref().unwrap_or_else(|| panic!("Slot {} not initialized", N));
+        data.wasm_macro.proc_macro(data.function_name, input)
+    }
+
+    macro_rules! make_slot_clients {
+        ($($n:literal),* $(,)?) => {
+            fn make_derive_client(slot: usize) -> Client<TokenStream, TokenStream> {
+                match slot {
+                    $($n => Client::expand1(slot_derive::<$n>),)*
+                    _ => panic!("Invalid derive slot: {} (max 63)", slot),
+                }
+            }
+
+            fn make_attr_client(slot: usize) -> Client<(TokenStream, TokenStream), TokenStream> {
+                match slot {
+                    $($n => Client::expand2(slot_attr::<$n>),)*
+                    _ => panic!("Invalid attr slot: {} (max 63)", slot),
+                }
+            }
+
+            fn make_bang_client(slot: usize) -> Client<TokenStream, TokenStream> {
+                match slot {
+                    $($n => Client::expand1(slot_bang::<$n>),)*
+                    _ => panic!("Invalid bang slot: {} (max 63)", slot),
+                }
+            }
+        };
+    }
+
+    make_slot_clients!(
+         0,  1,  2,  3,  4,  5,  6,  7,  8,  9,
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+        20, 21, 22, 23, 24, 25, 26, 27, 28, 29,
+        30, 31, 32, 33, 34, 35, 36, 37, 38, 39,
+        40, 41, 42, 43, 44, 45, 46, 47, 48, 49,
+        50, 51, 52, 53, 54, 55, 56, 57, 58, 59,
+        60, 61, 62, 63,
+    );
+    // ==================== END MACRO-GENERATED SLOT FUNCTIONS ====================
+    // Extract metadata from the WASM module's custom section
+    trace!("Extracting proc macro metadata from WASM...");
+    let metadata = extract_proc_macro_metadata(wasm_macro.wasm_bytes());
+    trace!("Found {} metadata entries", metadata.len());
+
+    if metadata.is_empty() {
+        trace!("No proc macro metadata found - returning empty");
+        debug!(
+            "No proc macro metadata found in WASM module. \
+             Make sure the proc macro crate includes the .rustc_proc_macro_decls custom section."
+        );
+        return Box::new([]);
+    }
+
+    // Leak the WasmMacro to get a 'static reference
+    let wasm_macro: &'static rustc_watt_runtime::WasmMacro = Box::leak(Box::new(wasm_macro));
+
+    // Create ProcMacro instances for each metadata entry
+    let proc_macros: Vec<ProcMacro> = metadata
+        .into_iter()
+        .map(|meta| {
+            let function_name: &'static str = Box::leak(meta.function_name().to_string().into_boxed_str());
+
+            match meta {
+                ProcMacroMetadata::CustomDerive { trait_name, attributes, .. } => {
+                    let slot = allocate_slot(SlotData {
+                        wasm_macro,
+                        function_name,
+                        slot_type: SlotType::Derive,
+                    });
+
+                    let static_attrs: &'static [&'static str] = {
+                        let attrs: Vec<&'static str> = attributes
+                            .into_iter()
+                            .map(|s| Box::leak(s.into_boxed_str()) as &'static str)
+                            .collect();
+                        Box::leak(attrs.into_boxed_slice())
+                    };
+
+                    let static_trait_name: &'static str = Box::leak(trait_name.into_boxed_str());
+
+                    ProcMacro::CustomDerive {
+                        trait_name: static_trait_name,
+                        attributes: static_attrs,
+                        client: make_derive_client(slot),
+                    }
+                }
+                ProcMacroMetadata::Attr { name, .. } => {
+                    let slot = allocate_slot(SlotData {
+                        wasm_macro,
+                        function_name,
+                        slot_type: SlotType::Attr,
+                    });
+
+                    let static_name: &'static str = Box::leak(name.into_boxed_str());
+
+                    ProcMacro::Attr {
+                        name: static_name,
+                        client: make_attr_client(slot),
+                    }
+                }
+                ProcMacroMetadata::Bang { name, .. } => {
+                    let slot = allocate_slot(SlotData {
+                        wasm_macro,
+                        function_name,
+                        slot_type: SlotType::Bang,
+                    });
+
+                    let static_name: &'static str = Box::leak(name.into_boxed_str());
+
+                    ProcMacro::Bang {
+                        name: static_name,
+                        client: make_bang_client(slot),
+                    }
+                }
+            }
+        })
+        .collect();
+
+    debug!("Created {} proc macro instances from WASM module", proc_macros.len());
+
+    proc_macros.into_boxed_slice()
+}
 pub enum DylibError {
     DlOpen(String, String),
     DlSym(String, String),

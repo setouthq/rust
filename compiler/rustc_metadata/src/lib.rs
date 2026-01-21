@@ -8,6 +8,7 @@
 #![feature(gen_blocks)]
 #![feature(if_let_guard)]
 #![feature(macro_metavar_expr)]
+#![feature(mapped_lock_guards)]
 #![feature(min_specialization)]
 #![feature(never_type)]
 #![feature(proc_macro_internals)]

@@ -428,6 +428,8 @@ top_level_options!(
         prints: Vec<PrintRequest> [UNTRACKED],
         cg: CodegenOptions [SUBSTRUCT CodegenOptionsTargetModifiers CodegenOptions],
         externs: Externs [UNTRACKED],
+        /// Mark this cdylib as a watt proc-macro crate in metadata
+        watt_cdylib_proc_macro: bool [TRACKED],
         crate_name: Option<String> [TRACKED],
         /// Indicates how the compiler should treat unstable features.
         unstable_features: UnstableFeatures [TRACKED],

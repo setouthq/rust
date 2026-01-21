@@ -3,6 +3,7 @@ resolver = "2"
 members = [
 # tidy-alphabetical-start
   "compiler/rustc",
+  "compiler/rustc_watt_runtime",
   "src/build_helper",
   "src/rustc-std-workspace/rustc-std-workspace-alloc",
   "src/rustc-std-workspace/rustc-std-workspace-core",
@@ -91,5 +92,6 @@ codegen-units = 1
 
 # If you want to use a crate with local modifications, you can set a path or git dependency here.
 # For git dependencies, also add your source to ALLOWED_SOURCES in src/tools/tidy/src/extdeps.rs.
-#[patch.crates-io]
+[patch.crates-io]
+synstructure = { git = "https://github.com/macovedj/synstructure" }
 

@@ -955,8 +955,13 @@ impl MetadataBlob {
 }
 
 impl CrateRoot {
+
     pub(crate) fn is_proc_macro_crate(&self) -> bool {
         self.proc_macro_data.is_some()
+    }
+
+    pub(crate) fn is_watt_proc_macro(&self) -> bool {
+        self.header.is_watt_proc_macro
     }
 
     pub(crate) fn name(&self) -> Symbol {
@@ -992,17 +997,28 @@ impl<'a> CrateMetadataRef<'a> {
     }
 
     fn raw_proc_macro(self, id: DefIndex) -> &'a ProcMacro {
-        // DefIndex's in root.proc_macro_data have a one-to-one correspondence
-        // with items in 'raw_proc_macros'.
-        let pos = self
-            .root
-            .proc_macro_data
-            .as_ref()
-            .unwrap()
-            .macros
-            .decode(self)
-            .position(|i| i == id)
-            .unwrap();
+        // For both watt and regular proc-macro crates with proc_macro_data,
+        // we need to find the position of the DefIndex in the macros list
+        let id_val = id.as_u32();
+        let base = u32::MAX - 1000;
+        
+        let pos = if let Some(proc_macro_data) = self.root.proc_macro_data.as_ref() {
+            // Has proc_macro_data: search for the DefIndex in macros list
+            let macros_iter = proc_macro_data.macros.decode(self);
+            macros_iter.into_iter().position(|i| i == id)
+                .expect(&format!("DefIndex {:?} not found in proc_macro_data.macros", id))
+        } else if self.root.is_watt_proc_macro() {
+            // Watt proc-macro without proc_macro_data (legacy path)
+            if id_val >= base {
+                (id_val - base) as usize
+            } else {
+                (id_val - 1) as usize
+            }
+        } else {
+            // Fallback
+            (id_val - 1) as usize
+        };
+
         &self.raw_proc_macros.unwrap()[pos]
     }
 
@@ -1029,8 +1045,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_ident_span
             .get(self, item_index)
-            .unwrap_or_else(|| self.missing("def_ident_span", item_index))
-            .decode((self, sess));
+            .map(|s| s.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, use DUMMY_SP
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro) && self.root.tables.def_ident_span.len == 0 {
+                    DUMMY_SP
+                } else {
+                    self.missing("def_ident_span", item_index)
+                }
+            });
         Some(Ident::new(name, span))
     }
 
@@ -1048,7 +1071,31 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_kind
             .get(self, item_id)
-            .unwrap_or_else(|| self.missing("def_kind", item_id))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, return reasonable defaults
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro) && self.root.tables.def_kind.len == 0 {
+                    // DefIndex 0 is always the crate root
+                    if item_id.as_u32() == 0 {
+                        return DefKind::Mod;
+                    }
+
+                    // For proc macros (DefIndex 1, 2, 3...), determine the macro kind
+                    if let Some(raw_proc_macros) = self.raw_proc_macros {
+                        let idx = (item_id.as_u32() - 1) as usize;
+                        if idx < raw_proc_macros.len() {
+                            use rustc_span::hygiene::MacroKind;
+                            let macro_kind = match raw_proc_macros[idx] {
+                                ProcMacro::CustomDerive { .. } => MacroKind::Derive,
+                                ProcMacro::Attr { .. } => MacroKind::Attr,
+                                ProcMacro::Bang { .. } => MacroKind::Bang,
+                            };
+                            return DefKind::Macro(macro_kind.into());
+                        }
+                    }
+                }
+
+                self.missing("def_kind", item_id)
+            })
     }
 
     fn get_span(self, index: DefIndex, sess: &Session) -> Span {
@@ -1056,11 +1103,18 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .def_span
             .get(self, index)
-            .unwrap_or_else(|| self.missing("def_span", index))
-            .decode((self, sess))
+            .map(|s| s.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs with empty metadata, return DUMMY_SP
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro) && self.root.tables.def_span.len == 0 {
+                    DUMMY_SP
+                } else {
+                    self.missing("def_span", index)
+                }
+            })
     }
 
-    fn load_proc_macro<'tcx>(self, id: DefIndex, tcx: TyCtxt<'tcx>) -> SyntaxExtension {
+    pub(crate) fn load_proc_macro<'tcx>(self, id: DefIndex, tcx: TyCtxt<'tcx>) -> SyntaxExtension {
         let (name, kind, helper_attrs) = match *self.raw_proc_macro(id) {
             ProcMacro::CustomDerive { trait_name, attributes, client } => {
                 let helper_attrs =
@@ -1181,9 +1235,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .visibility
             .get(self, id)
-            .unwrap_or_else(|| self.missing("visibility", id))
-            .decode(self)
-            .map_id(|index| self.local_def_id(index))
+            .map(|v| v.decode(self).map_id(|index| self.local_def_id(index)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, proc macros are always public
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro) && self.root.tables.visibility.len == 0 {
+                    Visibility::Public
+                } else {
+                    self.missing("visibility", id)
+                }
+            })
     }
 
     fn get_safety(self, id: DefIndex) -> Safety {
@@ -1199,8 +1259,15 @@ impl<'a> CrateMetadataRef<'a> {
             .tables
             .expn_that_defined
             .get(self, id)
-            .unwrap_or_else(|| self.missing("expn_that_defined", id))
-            .decode((self, sess))
+            .map(|e| e.decode((self, sess)))
+            .unwrap_or_else(|| {
+                // For WASM proc macro stubs, use the root expansion
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro) && self.root.tables.expn_that_defined.len == 0 {
+                    ExpnId::root()
+                } else {
+                    self.missing("expn_that_defined", id)
+                }
+            })
     }
 
     fn get_debugger_visualizers(self) -> Vec<DebuggerVisualizerFile> {
@@ -1380,6 +1447,15 @@ impl<'a> CrateMetadataRef<'a> {
             .attributes
             .get(self, id)
             .unwrap_or_else(|| {
+                // For watt proc-macro crates, return empty attributes
+                if self.root.header.is_watt_proc_macro {
+                    return LazyArray::default();
+                }
+                // Check if this is a WASM stub with empty attributes
+                if self.root.header.is_proc_macro_crate && self.root.tables.attributes.len == 0 {
+                    // Return empty attributes for WASM stubs
+                    return LazyArray::default();
+                }
                 // Structure and variant constructors don't have any attributes encoded for them,
                 // but we assume that someone passing a constructor ID actually wants to look at
                 // the attributes on the corresponding struct or variant.
@@ -1518,6 +1594,18 @@ impl<'a> CrateMetadataRef<'a> {
     fn get_macro(self, id: DefIndex, sess: &Session) -> ast::MacroDef {
         match self.def_kind(id) {
             DefKind::Macro(_) => {
+                // For watt proc-macros, the macro body is in WASM, not in the rmeta tables
+                if (self.root.header.is_proc_macro_crate || self.root.header.is_watt_proc_macro)
+                    && self.root.tables.macro_definition.len == 0 {
+                    return ast::MacroDef {
+                        macro_rules: false,
+                        body: Box::new(ast::DelimArgs {
+                            dspan: ast::tokenstream::DelimSpan::dummy(),
+                            delim: ast::token::Delimiter::Brace,
+                            tokens: ast::tokenstream::TokenStream::default(),
+                        }),
+                    };
+                }
                 let macro_rules = self.root.tables.is_macro_rules.get(self, id);
                 let body =
                     self.root.tables.macro_definition.get(self, id).unwrap().decode((self, sess));
@@ -1533,7 +1621,89 @@ impl<'a> CrateMetadataRef<'a> {
             .def_key_cache
             .lock()
             .entry(index)
-            .or_insert_with(|| self.root.tables.def_keys.get(self, index).unwrap().decode(self))
+            .or_insert_with(|| {
+                // For WASM proc macro stubs with empty metadata, return synthetic def keys
+                if let Some(key) = self.root.tables.def_keys.get(self, index) {
+                    key.decode(self)
+                } else if self.root.header.is_proc_macro_crate && self.root.tables.def_keys.len == 0 {
+                    // DefIndex 0 is the crate root
+                    if index.as_u32() == 0 {
+                        return DefKey {
+                            parent: None,
+                            disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                                data: rustc_hir::definitions::DefPathData::CrateRoot,
+                                disambiguator: 0,
+                            },
+                        };
+                    }
+
+                    // For proc macros (DefIndex 1, 2, 3...), create a def key with the macro name
+                    if let Some(raw_proc_macros) = self.raw_proc_macros {
+                        let idx = (index.as_u32() - 1) as usize;
+                        if idx < raw_proc_macros.len() {
+                            let name = match raw_proc_macros[idx] {
+                                ProcMacro::CustomDerive { trait_name, .. } => trait_name,
+                                ProcMacro::Attr { name, .. } => name,
+                                ProcMacro::Bang { name, .. } => name,
+                            };
+                            return DefKey {
+                                parent: Some(rustc_span::def_id::DefIndex::from_u32(0)),
+                                disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                                    data: rustc_hir::definitions::DefPathData::ValueNs(Symbol::intern(name)),
+                                    disambiguator: 0,
+                                },
+                            };
+                        }
+                    }
+
+                    // Fallback: return crate root
+                    DefKey {
+                        parent: None,
+                        disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                            data: rustc_hir::definitions::DefPathData::CrateRoot,
+                            disambiguator: 0,
+                        },
+                    }
+                } else if self.root.header.is_watt_proc_macro {
+                    // For watt proc-macro crates with real metadata, create synthetic keys
+                    // for DefIndexes that don't exist in the metadata (proc-macro DefIds)
+                    // Synthetic proc-macro DefIndexes use high values: u32::MAX - 1000 + idx
+                    let index_val = index.as_u32();
+                    let base = u32::MAX - 1000;
+                    
+                    if index_val >= base {
+                        // This is a synthetic proc-macro DefIndex
+                        let pm_idx = (index_val - base) as usize;
+                        if let Some(raw_proc_macros) = self.raw_proc_macros {
+                            if pm_idx < raw_proc_macros.len() {
+                                let name = match raw_proc_macros[pm_idx] {
+                                    ProcMacro::CustomDerive { trait_name, .. } => trait_name,
+                                    ProcMacro::Attr { name, .. } => name,
+                                    ProcMacro::Bang { name, .. } => name,
+                                };
+                                return DefKey {
+                                    parent: Some(rustc_span::def_id::DefIndex::from_u32(0)),
+                                    disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                                        data: rustc_hir::definitions::DefPathData::MacroNs(Symbol::intern(name)),
+                                        disambiguator: 0,
+                                    },
+                                };
+                            }
+                        }
+                    }
+                    
+                    // Fallback for watt: return crate root
+                    DefKey {
+                        parent: None,
+                        disambiguated_data: rustc_hir::definitions::DisambiguatedDefPathData {
+                            data: rustc_hir::definitions::DefPathData::CrateRoot,
+                            disambiguator: 0,
+                        },
+                    }
+                } else {
+                    bug!("def_key: no key for {:?}", index)
+                }
+            })
     }
 
     // Returns the path leading to the thing with this `id`.
@@ -1544,6 +1714,14 @@ impl<'a> CrateMetadataRef<'a> {
 
     #[inline]
     fn def_path_hash(self, index: DefIndex) -> DefPathHash {
+        // For WASM proc macro crates, generate synthetic unique hashes based on DefIndex
+        // since we don't have real metadata to decode from
+        if self.raw_proc_macros.is_some() {
+            // Use the DefIndex as the local hash to ensure uniqueness
+            let local_hash = rustc_hashes::Hash64::new(index.as_u32() as u64);
+            return DefPathHash::new(self.root.stable_crate_id, local_hash);
+        }
+        
         // This is a hack to workaround the fact that we can't easily encode/decode a Hash64
         // into the FixedSizeEncoding, as Hash64 lacks a Default impl. A future refactor to
         // relax the Default restriction will likely fix this.
@@ -2002,7 +2180,30 @@ impl CrateMetadata {
     }
 
     pub(crate) fn is_proc_macro_crate(&self) -> bool {
-        self.root.is_proc_macro_crate()
+        self.root.proc_macro_data.is_some()
+    }
+
+    pub(crate) fn is_watt_proc_macro(&self) -> bool {
+        let val = self.root.header.is_watt_proc_macro;
+        val
+    }
+
+    pub(crate) fn raw_proc_macros(&self) -> Option<&'static [ProcMacro]> {
+        self.raw_proc_macros
+    }
+    
+    /// Get the DefIndex values for proc macros from proc_macro_data
+    pub(crate) fn proc_macro_def_indices(&self, cstore: &CStore) -> Vec<DefIndex> {
+        self.root.proc_macro_data
+            .as_ref()
+            .map(|data| {
+                data.macros.decode(CrateMetadataRef { cdata: self, cstore }).collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn name(&self) -> Symbol {
+        self.root.header.name
     }
 
     pub(crate) fn proc_macros_for_crate(
@@ -2021,9 +2222,6 @@ impl CrateMetadata {
         }
     }
 
-    pub(crate) fn name(&self) -> Symbol {
-        self.root.header.name
-    }
 
     pub(crate) fn hash(&self) -> Svh {
         self.root.header.hash

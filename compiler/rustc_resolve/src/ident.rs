@@ -544,11 +544,28 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
                         }
                     }
                     Scope::MacroUsePrelude => {
-                        match this.macro_use_prelude.get(&ident.name).cloned() {
-                            Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
-                            None => Err(Determinacy::determined(
-                                this.graph_root.unexpanded_invocations.borrow().is_empty(),
-                            )),
+                        // First check WASM proc macros (watt proc-macro crates)
+                        if this.wasm_proc_macros.borrow().contains_key(&ident.name) {
+                            // Find the DefId for this macro name by searching the reverse map
+                            let def_id = this.wasm_proc_macro_def_id_to_name.borrow()
+                                .iter()
+                                .find(|(_, name)| **name == ident.name)
+                                .map(|(def_id, _)| *def_id)
+                                .expect("WASM proc macro should have a DefId mapping");
+
+                            // Create a NameBinding with the unique DefId
+                            let res = Res::Def(DefKind::Macro(MacroKind::Derive.into()), def_id);
+                            let binding = this.arenas.new_pub_res_binding(res, ident.span, LocalExpnId::ROOT);
+                            // Return early with the binding and flags
+                            Ok((binding, Flags::MISC_FROM_PRELUDE))
+                        } else {
+                            // Then check macro_use_prelude
+                            match this.macro_use_prelude.get(&ident.name).cloned() {
+                                Some(binding) => Ok((binding, Flags::MISC_FROM_PRELUDE)),
+                                None => Err(Determinacy::determined(
+                                    this.graph_root.unexpanded_invocations.borrow().is_empty(),
+                                )),
+                            }
                         }
                     }
                     Scope::BuiltinAttrs => match this.builtin_attrs_bindings.get(&ident.name) {

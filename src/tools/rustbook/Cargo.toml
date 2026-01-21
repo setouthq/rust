@@ -21,3 +21,6 @@ mdbook-spec = { path = "../../doc/reference/mdbook-spec" }
 version = "0.4.52"
 default-features = false
 features = ["search"]
+
+[patch.crates-io]
+synstructure = { git = "https://github.com/macovedj/synstructure" }

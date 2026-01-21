@@ -41,6 +41,7 @@ use late::{
 use macros::{MacroRulesBinding, MacroRulesScope, MacroRulesScopeRef};
 use rustc_arena::{DroplessArena, TypedArena};
 use rustc_ast::node_id::NodeMap;
+use rustc_session::cstore::CrateStore;
 use rustc_ast::{
     self as ast, AngleBracketedArg, CRATE_NODE_ID, Crate, Expr, ExprKind, GenericArg, GenericArgs,
     LitKind, NodeId, Path, attr,
@@ -1056,6 +1057,7 @@ struct DeriveData {
     has_derive_copy: bool,
 }
 
+#[derive(Clone)]
 struct MacroData {
     ext: Arc<SyntaxExtension>,
     nrules: usize,
@@ -1185,6 +1187,12 @@ pub struct Resolver<'ra, 'tcx> {
     macro_use_prelude: FxIndexMap<Symbol, NameBinding<'ra>>,
     /// Eagerly populated map of all local macro definitions.
     local_macro_map: FxHashMap<LocalDefId, &'ra MacroData>,
+    /// Storage for WASM proc macros (watt proc-macro crates)
+    /// Maps macro name (e.g., "Demo") to MacroData
+    wasm_proc_macros: CacheRefCell<FxHashMap<Symbol, MacroData>>,
+    /// Counter for generating synthetic DefIds for WASM proc macros
+    /// Maps synthetic DefId back to macro name for WASM proc macros
+    wasm_proc_macro_def_id_to_name: CacheRefCell<FxHashMap<DefId, Symbol>>,
     /// Lazily populated cache of macro definitions loaded from external crates.
     extern_macro_map: CacheRefCell<FxHashMap<DefId, &'ra MacroData>>,
     dummy_ext_bang: Arc<SyntaxExtension>,
@@ -1626,6 +1634,8 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
             registered_tools,
             macro_use_prelude: Default::default(),
             local_macro_map: Default::default(),
+            wasm_proc_macros: CacheRefCell::new(FxHashMap::default()),
+            wasm_proc_macro_def_id_to_name: CacheRefCell::new(FxHashMap::default()),
             extern_macro_map: Default::default(),
             dummy_ext_bang: Arc::new(SyntaxExtension::dummy_bang(edition)),
             dummy_ext_derive: Arc::new(SyntaxExtension::dummy_derive(edition)),
@@ -1857,9 +1867,40 @@ impl<'ra, 'tcx> Resolver<'ra, 'tcx> {
         }
     }
 
+
+    /// Register watt proc-macros for a crate when it is first accessed
+    /// Called from build_reduced_graph_external when processing a watt proc-macro crate
+    fn register_watt_proc_macros_for_crate(&self, cnum: CrateNum) {
+        // Check if already registered - look for any DefId with this crate
+        if self.wasm_proc_macro_def_id_to_name.borrow().iter().any(|(id, _)| id.krate == cnum) {
+            return;
+        }
+        
+        // Try to get watt proc-macros from the crate
+        // Note: We use the original CrateNum but with special DefIndex values
+        // that are recognized as synthetic by the decoder fallback paths
+        if let Some(macros) = self.cstore().get_watt_proc_macros(cnum, self.tcx) {
+            
+            for (name, ext, def_id) in macros.into_iter() {
+                // Use the real DefId from proc_macro_data
+                
+                // Create MacroData from the SyntaxExtension
+                let macro_data = MacroData::new(Arc::clone(&ext));
+                
+                // Store in maps with interior mutability
+                self.wasm_proc_macros.borrow_mut().insert(name, macro_data);
+                let macro_data_ref = self.arenas.alloc_macro(MacroData::new(ext));
+                self.extern_macro_map.borrow_mut().insert(def_id, macro_data_ref);
+                self.wasm_proc_macro_def_id_to_name.borrow_mut().insert(def_id, name);
+            }
+        }
+    }
+
     /// Entry point to crate resolution.
     pub fn resolve_crate(&mut self, krate: &Crate) {
         self.tcx.sess.time("resolve_crate", || {
+            // Note: WASM proc macros are now loaded early in Resolver::new()
+            // before macro expansion starts, not here.
             self.tcx.sess.time("finalize_imports", || self.finalize_imports());
             let exported_ambiguities = self.tcx.sess.time("compute_effective_visibilities", || {
                 EffectiveVisibilitiesVisitor::compute_effective_visibilities(self, krate)

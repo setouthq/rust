@@ -54,7 +54,12 @@ pub fn encode_and_write_metadata(tcx: TyCtxt<'_>) -> EncodedMetadata {
         None
     };
 
-    if tcx.needs_metadata() {
+    // Encode metadata if:
+    // 1. The crate type normally needs metadata (rlib, dylib, proc-macro), OR
+    // 2. The user explicitly requested metadata output via --emit=metadata
+    //    (needed for cdylib proc-macros on WASM targets)
+    let explicit_metadata = tcx.sess.opts.output_types.contains_key(&OutputType::Metadata);
+    if tcx.needs_metadata() || explicit_metadata {
         encode_metadata(tcx, &metadata_filename, metadata_stub_filename.as_deref());
     } else {
         // Always create a file at `metadata_filename`, even if we have nothing to write to it.
@@ -74,7 +79,12 @@ pub fn encode_and_write_metadata(tcx: TyCtxt<'_>) -> EncodedMetadata {
     // If the user requests metadata as output, rename `metadata_filename`
     // to the expected output `out_filename`. The match above should ensure
     // this file always exists.
-    let need_metadata_file = tcx.sess.opts.output_types.contains_key(&OutputType::Metadata);
+    // For WASM proc-macro crates, always emit .rmeta alongside .wasm
+    let is_wasm_proc_macro = tcx.crate_types().contains(&CrateType::ProcMacro)
+        && tcx.sess.target.is_like_wasm;
+
+    let need_metadata_file = tcx.sess.opts.output_types.contains_key(&OutputType::Metadata)
+        || is_wasm_proc_macro;
     let (metadata_filename, metadata_tmpdir) = if need_metadata_file {
         let filename = match out_filename {
             OutFileName::Real(ref path) => {

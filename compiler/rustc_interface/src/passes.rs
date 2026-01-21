@@ -268,6 +268,7 @@ fn configure_and_expand(
     let crate_types = tcx.crate_types();
     let is_executable_crate = crate_types.contains(&CrateType::Executable);
     let is_proc_macro_crate = crate_types.contains(&CrateType::ProcMacro);
+    let is_watt_cdylib = sess.opts.watt_cdylib_proc_macro;
 
     if crate_types.len() > 1 {
         if is_executable_crate {
@@ -292,8 +293,8 @@ fn configure_and_expand(
             sess,
             features,
             resolver,
-            is_proc_macro_crate,
-            has_proc_macro_decls,
+            is_proc_macro_crate || is_watt_cdylib,
+            has_proc_macro_decls || is_watt_cdylib,
             is_test_crate,
             sess.dcx(),
         )
