@@ -63,13 +63,6 @@ impl MetadataBlob {
         if MemDecoder::new(&slice, 0).is_ok() { Ok(Self(slice)) } else { Err(()) }
     }
 
-     /// Creates a MetadataBlob without validation.
-    /// This is used for WASM proc macro stubs where we won't actually decode from the blob.
-    #[cfg(target_family = "wasm")]
-    pub(crate) fn new_unvalidated(slice: OwnedSlice) -> Self {
-        Self(slice)
-    }
-
     /// Since this has passed the validation of [`MetadataBlob::new`], this returns bytes which are
     /// known to pass the [`MemDecoder`] validation.
     pub(crate) fn bytes(&self) -> &OwnedSlice {

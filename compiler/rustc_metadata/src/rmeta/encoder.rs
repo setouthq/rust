@@ -725,10 +725,7 @@ impl<'a, 'tcx> EncodeContext<'a, 'tcx> {
                     hash: tcx.crate_hash(LOCAL_CRATE),
                     is_proc_macro_crate: proc_macro_data.is_some(),
                     is_stub: false,
-                    is_watt_proc_macro: {
-                        let flag = tcx.sess.opts.watt_cdylib_proc_macro;
-                        flag
-                    },
+                    is_watt_proc_macro: tcx.sess.opts.watt_cdylib_proc_macro,
                 },
                 extra_filename: tcx.sess.opts.cg.extra_filename.clone(),
                 stable_crate_id: tcx.def_path_hash(LOCAL_CRATE.as_def_id()).stable_crate_id(),

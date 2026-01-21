@@ -2855,11 +2855,6 @@ pub fn build_session_options(early_dcx: &mut EarlyDiagCtxt, matches: &getopts::M
 
     let externs = parse_externs(early_dcx, matches, &unstable_opts);
     let watt_cdylib_proc_macro = matches.opt_present("watt-cdylib-proc-macro");
-    if watt_cdylib_proc_macro {
-        eprintln!("
-=== WATT FLAG DETECTED IN SESSION CONFIG ===
-");
-    }
 
     let remap_path_prefix = parse_remap_path_prefix(early_dcx, matches, &unstable_opts);
 
