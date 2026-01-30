@@ -884,6 +884,41 @@ fn configure_llvm(builder: &Builder<'_>, target: TargetSelection, cfg: &mut cmak
     if builder.config.llvm_allow_old_toolchain {
         cfg.define("LLVM_TEMPORARILY_ALLOW_OLD_TOOLCHAIN", "YES");
     }
+
+    // WASI cross-compilation configuration
+    if target.contains("wasi") {
+        let wasi_sysroot = std::env::var("WASI_SYSROOT").ok();
+        if let Some(ref sysroot) = wasi_sysroot {
+            let sdk_path = std::path::Path::new(sysroot)
+                .join("..").join("..")
+                .canonicalize()
+                .ok();
+            if let Some(ref sdk) = sdk_path {
+                let sdk_str = sdk.to_str().unwrap_or("");
+                let wasi_target = target.triple.to_string();
+                
+                let mut cflags = format!("--sysroot={}", sysroot);
+                if target.contains("threads") {
+                    cflags.push_str(" -pthread");
+                }
+                cflags.push_str(" -D_WASI_EMULATED_MMAN -D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS");
+                
+                cfg.define("WASI", "TRUE");
+                cfg.define("CMAKE_SYSTEM_NAME", "Generic");
+                cfg.define("CMAKE_SYSTEM_PROCESSOR", "wasm32");
+                cfg.define("CMAKE_EXECUTABLE_SUFFIX", ".wasm");
+                cfg.define("CMAKE_C_COMPILER", format!("{}/bin/{}-clang", sdk_str, wasi_target));
+                cfg.define("CMAKE_CXX_COMPILER", format!("{}/bin/{}-clang++", sdk_str, wasi_target));
+                cfg.define("CMAKE_C_COMPILER_TARGET", &wasi_target);
+                cfg.define("CMAKE_CXX_COMPILER_TARGET", &wasi_target);
+                cfg.define("CMAKE_C_FLAGS", &cflags);
+                cfg.define("CMAKE_CXX_FLAGS", &cflags);
+                cfg.define("CMAKE_LINKER", format!("{}/bin/wasm-ld", sdk_str));
+                cfg.define("CMAKE_AR", format!("{}/bin/ar", sdk_str));
+                cfg.define("CMAKE_RANLIB", format!("{}/bin/ranlib", sdk_str));
+            }
+        }
+    }
 }
 
 // Adapted from https://github.com/alexcrichton/cc-rs/blob/fba7feded71ee4f63cfe885673ead6d7b4f2f454/src/lib.rs#L2347-L2365

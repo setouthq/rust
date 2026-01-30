@@ -226,6 +226,15 @@ fn main() {
         cfg.define("NDEBUG", None);
     }
 
+    if target.contains("wasi") {
+        // ref src/bootstrap/src/core/build_steps/llvm.rs
+
+        let wasi_sysroot = env::var("WASI_SYSROOT").expect("WASI_SYSROOT not set");
+        cfg.compiler(format!("{wasi_sysroot}/../../bin/{target}-clang++"));
+        cfg.flag("-pthread");
+        cfg.flag("-D_WASI_EMULATED_MMAN");
+    }
+
     rerun_if_changed_anything_in_dir(Path::new("llvm-wrapper"));
     cfg.file("llvm-wrapper/PassWrapper.cpp")
         .file("llvm-wrapper/RustWrapper.cpp")
@@ -343,6 +352,10 @@ fn main() {
         println!("cargo:rustc-link-lib={kind}={name}");
     }
 
+    if target.contains("wasi") {
+        println!("cargo:rustc-link-lib=static=LLVMOption");
+    }
+
     // LLVM ldflags
     //
     // If we're a cross-compile of LLVM then unfortunately we can't trust these
@@ -392,6 +405,7 @@ fn main() {
         || target.contains("windows-gnullvm")
         || target.contains("aix")
         || target.contains("ohos")
+        || target.contains("wasi")
     {
         "c++"
     } else if target.contains("netbsd") && llvm_static_stdcpp.is_some() {
