@@ -19,7 +19,13 @@ pub(crate) fn target() -> Target {
 
     options.add_pre_link_args(
         LinkerFlavor::WasmLld(Cc::No),
-        &["--import-memory", "--export-memory", "--shared-memory", "--max-memory=1073741824"],
+        &[
+            "--import-memory",
+            "--export-memory",
+            "--shared-memory",
+            "--max-memory=1073741824",
+            "-lwasi-emulated-mman",
+        ],
     );
     options.add_pre_link_args(
         LinkerFlavor::WasmLld(Cc::Yes),
@@ -29,6 +35,7 @@ pub(crate) fn target() -> Target {
             "-Wl,--export-memory,",
             "-Wl,--shared-memory",
             "-Wl,--max-memory=1073741824",
+            "-lwasi-emulated-mman",
         ],
     );
 
